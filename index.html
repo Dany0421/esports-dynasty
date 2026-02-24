@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Esports Dynasty</title>
+  <meta name="color-scheme" content="dark" />
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="teamSelectionScreen" class="team-selection" style="display: none;">
+    <div class="team-selection__header">
+      <h1>ESPORTS DYNASTY</h1>
+      <p>Choose your organization</p>
+    </div>
+    <div id="teamSelectionGrid" class="team-selection__grid"></div>
+  </div>
+
+  <div class="layout" id="app">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo__main">ESPORTS DYNASTY</div>
+        <div class="logo__sub">Project Nexus</div>
+      </div>
+
+      <nav class="menu">
+        <button class="menu__item is-active" data-route="overview">Overview</button>
+        <button class="menu__item" data-route="roster">Roster</button>
+        <button class="menu__item" data-route="development">Development</button>
+        <button class="menu__item" data-route="market">Market</button>
+        <button class="menu__item" data-route="youth">Youth Academy</button>
+        <button class="menu__item" data-route="season">Season</button>
+        <button class="menu__item" data-route="career">Career</button>
+        <button class="menu__item" data-route="operations">Operations</button>
+      </nav>
+
+      <div class="sidebar__meta">
+        <div class="meta-box">
+          <div class="meta-k">Cycle</div>
+          <div class="meta-v" id="uiCycle">1</div>
+        </div>
+        <div class="meta-box">
+          <div class="meta-k">Org Tier</div>
+          <div class="meta-v" id="uiTier">Challenger</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN AREA -->
+    <main class="content">
+
+      <!-- TOP HEADER -->
+      <header class="header">
+        <div>
+          <h1 id="uiPageTitle">Overview</h1>
+          <p id="uiPageSubtitle">Organizational status & competitive outlook</p>
+        </div>
+
+        <div class="header__stats">
+          <div class="stat">
+            <span class="stat__k">Capital</span>
+            <span class="stat__v" id="uiCapital">$950,000</span>
+          </div>
+          <div class="stat">
+            <span class="stat__k">Reputation</span>
+            <span class="stat__v" id="uiRep">Rising</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- OVERVIEW PAGE -->
+      <section class="page is-active" data-page="overview">
+
+        <section class="panel panel--highlight" id="fixturePanel">
+          <h2 id="uiFixtureTitle">Next Fixture</h2>
+          <div class="fixture__matchday" id="uiMatchdayInfo">Matchday —</div>
+          <div class="fixture">
+            <div class="fixture__team">
+              <span class="badge badge--you" id="uiBadgeLeft">YOU</span>
+              <span id="uiTeamName">Nexus Core</span>
+            </div>
+            <div class="fixture__vs">VS</div>
+            <div class="fixture__team">
+              <span class="badge" id="uiBadgeRight">OPP</span>
+              <span id="uiOpponent">Crimson Arc</span>
+            </div>
+          </div>
+          <div class="fixture__meta">
+            <div><strong>Meta:</strong> <span id="uiMetaName">—</span></div>
+            <div id="uiMetaDesc" class="fixture__meta-desc"></div>
+            <div><strong>Map:</strong> <span id="uiFixtureMap">—</span></div>
+            <div><strong>Environment:</strong> Balanced</div>
+          </div>
+          <div class="fixture__actions">
+            <button class="btn btn--primary" id="btnSim">Simulate Match</button>
+            <div class="fixture__actions-right">
+              <button class="btn" id="btnSave">Save</button>
+              <button class="btn" id="btnNewCareer">Start New Career</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="grid grid--2">
+
+          <section class="panel">
+            <h3>Team Snapshot</h3>
+            <div class="status-grid">
+              <div class="status">
+                <div class="status__k">Synergy</div>
+                <div class="status__v" id="uiSyn">Stable</div>
+              </div>
+              <div class="status">
+                <div class="status__k">Momentum</div>
+                <div class="status__v" id="uiMomentum">+1</div>
+              </div>
+              <div class="status">
+                <div class="status__k">Confidence</div>
+                <div class="status__v" id="uiConfidence">Medium</div>
+              </div>
+            </div>
+            <div class="age-distribution" id="uiAgeDistribution">
+              <div class="status"><div class="status__k">Avg age</div><div class="status__v" id="uiAvgAge">—</div></div>
+              <div class="age-pills" id="uiAgePills"></div>
+            </div>
+            <div class="status">
+              <div class="status__k">Team training</div>
+              <div class="status__v status__v--training">
+                <span id="uiActiveTeamTraining">—</span>
+                <span id="uiActiveTeamTrainingDesc" class="status__v-desc"></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h3>Financial State</h3>
+            <div class="card-row">
+              <div class="mini-card">
+                <div>Monthly Cost</div>
+                <div id="uiCost">$180,000</div>
+              </div>
+              <div class="mini-card">
+                <div>Revenue</div>
+                <div id="uiRevenue">$0</div>
+              </div>
+              <div class="mini-card">
+                <div>Runway</div>
+                <div id="uiRunway">5 months</div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </section>
+
+      <!-- ROSTER PAGE -->
+      <section class="page" data-page="roster">
+        <div class="roster-contract-warning is-hidden" id="rosterContractWarning" role="alert">
+          <strong>Contract alert</strong>
+          <p id="rosterContractWarningText"></p>
+        </div>
+        <section class="panel panel--meta-impact">
+          <h3>Meta impact on roster</h3>
+          <p class="meta-impact-text" id="rosterMetaImpact">—</p>
+        </section>
+        <section class="panel">
+          <h2>Starting Lineup</h2>
+          <div class="roster-grid" id="startingRoster">
+            <!-- JS injects players here -->
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Bench</h2>
+          <div class="bench-list" id="benchRoster">
+            <!-- JS injects bench -->
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Reserves</h2>
+          <p class="reserve-hint">Players you sign go here.</p>
+          <div class="reserve-list" id="reserveRoster">
+            <!-- JS injects reserves -->
+          </div>
+        </section>
+        <div class="modal-overlay is-hidden" id="playerDetailModal" aria-hidden="true">
+          <div class="modal player-detail-modal">
+            <div class="player-detail-modal__header">
+              <h3 class="modal__title" id="playerDetailName">—</h3>
+              <span class="player-detail-modal__age" id="playerDetailAge">—</span>
+            </div>
+            <div class="player-detail-modal__section player-detail-modal__roles">
+              <p><strong>Primary role:</strong> <span id="playerDetailRolePrimary">—</span></p>
+              <p><strong>Secondary role:</strong> <span id="playerDetailRoleSecondary">—</span></p>
+              <p><strong>Flex:</strong> <span id="playerDetailRoleFlex">—</span></p>
+            </div>
+            <div class="player-detail-modal__section">
+              <strong>Stats</strong>
+              <div id="playerDetailStats" class="player-detail-stats"></div>
+            </div>
+            <div class="player-detail-modal__section">
+              <strong>Contract</strong>
+              <p id="playerDetailContract">—</p>
+            </div>
+            <div class="player-detail-modal__actions">
+              <button type="button" class="btn btn--secondary" id="playerDetailMoveToBench" style="display:none;">Move to bench</button>
+              <button type="button" class="btn btn--secondary" id="playerDetailMoveToStarter" style="display:none;">Move to starter</button>
+              <button type="button" class="btn btn--primary" id="playerDetailOfferContract">Offer new contract</button>
+              <button type="button" class="btn btn--danger" id="playerDetailSell">Sell</button>
+            </div>
+            <button type="button" class="modal__close" id="playerDetailClose" aria-label="Close">×</button>
+          </div>
+        </div>
+        <div class="modal-overlay is-hidden" id="contractOfferModal" aria-hidden="true">
+          <div class="modal contract-offer-modal">
+            <h3 class="modal__title">Offer new contract</h3>
+            <p class="modal__player-name" id="contractOfferPlayerName"></p>
+            <div class="modal__form">
+              <label>Years: <select id="contractOfferYears"><option value="1">1 year</option><option value="2" selected>2 years</option><option value="3">3 years</option></select></label>
+              <label>Monthly salary ($): <input type="number" id="contractOfferSalary" min="1000" step="500" value="10000"></label>
+            </div>
+            <div class="modal__actions">
+              <button type="button" class="btn btn--secondary" id="contractOfferCancel">Cancel</button>
+              <button type="button" class="btn btn--primary" id="contractOfferConfirm">Offer contract</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DEVELOPMENT PAGE -->
+      <section class="page page--development" data-page="development">
+        <section class="panel panel--development-team">
+          <h2>Team training</h2>
+          <p class="panel__hint">Affects match performance. Stays active until you change it.</p>
+          <label class="development-team-label">Active plan: <select id="teamTrainingSelect" class="development-team-select"><option value="Fast Execute">Fast Execute</option><option value="Default Heavy">Default Heavy</option><option value="Contact Play">Contact Play</option><option value="Utility Spam">Utility Spam</option><option value="Anti-Strat">Anti-Strat</option><option value="Post-Plant">Post-Plant</option></select></label>
+        </section>
+        <section class="panel panel--development-players">
+          <h2>Player training plans</h2>
+          <p class="panel__hint">Permanent stat growth per player. Choose one plan per player.</p>
+          <div id="developmentPlayerList" class="development-player-list"></div>
+        </section>
+        <section class="panel panel--development-youth">
+          <h2>Youth academy training</h2>
+          <p class="panel__hint">Train any stat at full rate. Once promoted, growth uses role caps.</p>
+          <div id="developmentYouthList" class="development-youth-list"></div>
+        </section>
+        <section class="panel panel--development-youth-history">
+          <h2>Youth training history</h2>
+          <p class="panel__hint">Last 5 matchdays: which stats you improved on which players.</p>
+          <div id="developmentYouthHistory" class="development-youth-history-list"></div>
+        </section>
+      </section>
+
+      <!-- MARKET PAGE -->
+      <section class="page" data-page="market">
+        <section class="panel">
+          <h2>Transfer Market</h2>
+          <p class="market-refresh-hint" id="marketRefreshHint">Market refreshes in — matchdays</p>
+          <div class="market-filters">
+            <label>Role: <select id="marketFilterRole"><option value="">All</option><option value="Duelist">Duelist</option><option value="Controller">Controller</option><option value="Initiator">Initiator</option><option value="Sentinel">Sentinel</option></select></label>
+            <label>Age: <select id="marketFilterAge"><option value="">All</option><option value="youth">Youth (≤21)</option><option value="prime">Prime (22–25)</option><option value="veteran">Veteran (26+)</option></select></label>
+            <label>Price: <select id="marketFilterPrice"><option value="">All</option><option value="under50">Under $50k</option><option value="50-150">$50k–$150k</option><option value="150plus">$150k+</option></select></label>
+          </div>
+          <div id="marketListings" class="market-listings"></div>
+        </section>
+        <section class="panel">
+          <h3>Free Agents</h3>
+          <div id="freeAgentsListings" class="market-listings"></div>
+        </section>
+        <section class="panel panel--transfer-history">
+          <h2>Transfer history</h2>
+          <p class="panel__hint">Players in and out per team (Main + Challenger). Transfer market refreshes at end of season.</p>
+          <div id="transferHistoryList" class="transfer-history-list"></div>
+        </section>
+      </section>
+
+      <!-- YOUTH ACADEMY PAGE -->
+      <section class="page" data-page="youth">
+        <section class="panel">
+          <h2>Your Academy</h2>
+          <p class="panel__hint">Max 4 players (14–17 years) at base. Facilities can increase this up to 8. Only 17-year-olds can be promoted to roster. At 18 they leave to free agents.</p>
+          <div id="youthAcademyListings" class="market-listings"></div>
+        </section>
+        <section class="panel">
+          <h3>Youth Market</h3>
+          <p class="panel__hint">Prospects available to sign to your academy — salary only, no transfer fee. Refreshes every season.</p>
+          <div id="youthMarketListings" class="market-listings"></div>
+        </section>
+      </section>
+
+      <!-- SEASON PAGE -->
+      <section class="page" data-page="season">
+        <section class="panel">
+          <h2>League Standings</h2>
+          <div id="standings"></div>
+        </section>
+        <section class="panel">
+          <h2>Schedule</h2>
+          <div id="schedule"></div>
+        </section>
+      </section>
+
+      <!-- CAREER PAGE -->
+      <section class="page" data-page="career">
+        <section class="panel panel--highlight">
+          <h2>Current Season</h2>
+          <div class="career-summary" id="careerSummary">
+            <div class="career-row">
+              <span class="career-k">Team</span>
+              <span class="career-v" id="careerTeam">—</span>
+            </div>
+            <div class="career-row">
+              <span class="career-k">Position</span>
+              <span class="career-v" id="careerPosition">—</span>
+            </div>
+            <div class="career-row">
+              <span class="career-k">Record</span>
+              <span class="career-v" id="careerRecord">—</span>
+            </div>
+            <div class="career-row">
+              <span class="career-k">Win rate</span>
+              <span class="career-v" id="careerWinRate">—</span>
+            </div>
+            <div class="career-row">
+              <span class="career-k">Playoffs / Relegation</span>
+              <span class="career-v" id="careerOutcome">—</span>
+            </div>
+            <div class="career-row">
+              <span class="career-k">Players retired (tenure)</span>
+              <span class="career-v" id="careerRetiredTotal">0</span>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Past Seasons</h2>
+          <div id="careerPastSeasons" class="career-past"></div>
+        </section>
+      </section>
+
+      <!-- OPERATIONS PAGE -->
+      <section class="page" data-page="operations">
+        <section class="panel panel--operations">
+          <h2>Organization Management</h2>
+          <div class="operations-tabs">
+            <button type="button" class="btn operations-tab is-active" data-operations-tab="coaches">Coaches</button>
+            <button type="button" class="btn operations-tab" data-operations-tab="facilities">Facilities</button>
+            <button type="button" class="btn operations-tab" data-operations-tab="psychology">Psychology</button>
+            <button type="button" class="btn operations-tab" data-operations-tab="sponsors">Sponsors</button>
+          </div>
+          <div id="operationsContent" class="operations-content">
+            <div id="operationsCoaches" class="operations-panel is-visible" data-panel="coaches"></div>
+            <div id="operationsFacilities" class="operations-panel" data-panel="facilities"></div>
+            <div id="operationsPsychology" class="operations-panel" data-panel="psychology"></div>
+            <div id="operationsSponsors" class="operations-panel" data-panel="sponsors"></div>
+          </div>
+        </section>
+      </section>
+
+      <!-- Global modals (visible from any page) -->
+      <div class="modal-overlay is-hidden" id="marketPlayerModal" aria-hidden="true">
+        <div class="modal market-player-modal">
+          <h3 class="modal__title" id="marketPlayerName">—</h3>
+          <p class="market-player-modal__meta" id="marketPlayerMeta">—</p>
+          <div class="market-player-modal__body">
+            <div id="marketPlayerStats" class="player-detail-stats"></div>
+            <div class="market-player-modal__price" id="marketPlayerPrice"></div>
+            <div class="market-player-modal__error" id="marketPlayerError" style="display:none;"></div>
+          </div>
+          <div class="modal__actions">
+            <button type="button" class="btn btn--secondary" id="marketPlayerModalClose">Cancel</button>
+            <button type="button" class="btn btn--primary" id="marketPlayerModalBuy">Buy</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-overlay is-hidden" id="otherTeamRosterModal" aria-hidden="true">
+        <div class="modal">
+          <h3 class="modal__title" id="otherTeamRosterTitle">—</h3>
+          <div class="other-team-roster">
+            <h4 class="other-team-roster__section">Starters</h4>
+            <div id="otherTeamStarters" class="other-team-roster__list"></div>
+            <h4 class="other-team-roster__section">Bench</h4>
+            <div id="otherTeamBench" class="other-team-roster__list"></div>
+            <h4 class="other-team-roster__section">Reserves</h4>
+            <div id="otherTeamReserves" class="other-team-roster__list"></div>
+          </div>
+          <div class="modal__actions">
+            <button type="button" id="otherTeamRosterModalClose" class="btn btn--secondary">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay is-hidden" id="youthAcademyPlayerModal" aria-hidden="true">
+        <div class="modal player-detail-modal">
+          <div class="player-detail-modal__header">
+            <h3 class="modal__title" id="youthAcademyPlayerName">—</h3>
+            <span class="player-detail-modal__age" id="youthAcademyPlayerAge">—</span>
+          </div>
+          <div class="player-detail-modal__section player-detail-modal__roles">
+            <p><strong>Primary role:</strong> <span id="youthAcademyPlayerRolePrimary">—</span></p>
+            <p><strong>Secondary role:</strong> <span id="youthAcademyPlayerRoleSecondary">—</span></p>
+            <p><strong>Flex:</strong> <span id="youthAcademyPlayerRoleFlex">—</span></p>
+          </div>
+          <div class="player-detail-modal__section">
+            <strong>Stats</strong>
+            <div id="youthAcademyPlayerStats" class="player-detail-stats"></div>
+          </div>
+          <div class="player-detail-modal__section">
+            <strong>Salary</strong>
+            <p id="youthAcademyPlayerSalary">—</p>
+          </div>
+          <div class="player-detail-modal__actions">
+            <button type="button" class="btn btn--primary" id="youthAcademyPlayerPromote">Promote to roster</button>
+            <button type="button" class="btn btn--danger" id="youthAcademyPlayerRelease">Release</button>
+          </div>
+          <button type="button" class="modal__close" id="youthAcademyPlayerClose" aria-label="Close">×</button>
+        </div>
+      </div>
+
+      <div class="modal-overlay is-hidden" id="pastSeasonDetailModal" aria-hidden="true">
+        <div class="modal">
+          <h3 class="modal__title" id="pastSeasonDetailTitle">Season —</h3>
+          <div class="career-summary" id="pastSeasonDetailSummary">
+            <!-- Your season: Position, Record, Outcome, Retired, Champion (career-row style) -->
+          </div>
+          <h4 class="past-season-detail__section">Season summary</h4>
+          <p class="past-season-detail__text" id="pastSeasonDetailText" style="white-space: pre-line;"></p>
+          <div class="modal__actions">
+            <button type="button" id="pastSeasonDetailModalClose" class="btn btn--secondary">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Match result page (regular / playoffs / relegation) -->
+      <div class="modal-overlay is-hidden match-result-overlay" id="matchResultPage" aria-hidden="true">
+        <div class="modal match-result-page" id="matchResultPageContent">
+          <h2 class="match-result__title" id="matchResultTitle">Match Result</h2>
+          <div class="match-result__score-row">
+            <span class="match-result__team" id="matchResultTeamA">—</span>
+            <span class="match-result__score" id="matchResultScore">— – —</span>
+            <span class="match-result__team" id="matchResultTeamB">—</span>
+          </div>
+          <div class="match-result__meta">
+            <span><strong>Map:</strong> <span id="matchResultMap">—</span></span>
+            <span class="match-result__mvp"><strong>MVP:</strong> <span id="matchResultMVP">—</span></span>
+          </div>
+          <div class="match-result__standings-row">
+            <div class="match-result__standings-box">
+              <h4>Your team ratings</h4>
+              <div id="matchResultMainStandings" class="match-result__standings-list"></div>
+            </div>
+            <div class="match-result__standings-box">
+              <h4>Opponent ratings</h4>
+              <div id="matchResultChallengerStandings" class="match-result__standings-list"></div>
+            </div>
+          </div>
+          <div class="match-result__actions">
+            <button type="button" class="btn btn--primary" id="matchResultContinue">Continue</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Season stats page (end of season) -->
+      <div class="modal-overlay is-hidden season-stats-overlay" id="seasonStatsPage" aria-hidden="true">
+        <div class="modal season-stats-page" id="seasonStatsPageContent">
+          <h2 class="season-stats__title" id="seasonStatsTitle">Season Complete</h2>
+          <p class="season-stats__subtitle" id="seasonStatsSubtitle">Season — finished. Season — started.</p>
+          <div class="season-stats__body" id="seasonStatsBody">
+            <div class="season-stats__col season-stats__col--summary">
+              <div class="season-stats__block">
+                <h4>Champion</h4>
+                <p id="seasonStatsChampion">—</p>
+              </div>
+              <div class="season-stats__block season-stats__win-rate">
+                <h4>Your win rate (finished season)</h4>
+                <p id="seasonStatsWinRate">—</p>
+              </div>
+              <div class="season-stats__block">
+                <h4>Retired players</h4>
+                <p id="seasonStatsRetired">—</p>
+              </div>
+              <div class="season-stats__block">
+                <h4>Relegation</h4>
+                <p id="seasonStatsRelegation">—</p>
+              </div>
+              <div class="season-stats__block">
+                <h4>Map rotation</h4>
+                <p id="seasonStatsMaps">—</p>
+              </div>
+            </div>
+            <div class="season-stats__col season-stats__col--standings">
+              <div class="season-stats__block">
+                <h4>Main League top 8</h4>
+                <p id="seasonStatsMainTop4">—</p>
+              </div>
+              <div class="season-stats__block">
+                <h4>Main League bottom 2</h4>
+                <p id="seasonStatsMainBottom2">—</p>
+              </div>
+              <div class="season-stats__block">
+                <h4>Challenger top 4</h4>
+                <p id="seasonStatsChallengerTop2">—</p>
+              </div>
+            </div>
+          </div>
+          <div class="season-stats__actions">
+            <button type="button" class="btn btn--primary" id="seasonStatsContinue">Continue</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+    <div id="jobOffersModal" class="modal modal--job-offers" style="display: none;" aria-hidden="true">
+      <div class="modal__overlay"></div>
+      <div class="modal__content">
+        <h2>Job Offers</h2>
+        <p class="modal__subtitle">Other organizations are interested in your services</p>
+        <div id="jobOffersList" class="job-offers-list"></div>
+        <div class="modal__actions">
+          <button type="button" id="btnDeclineAllOffers" class="btn btn--secondary">Stay with current team</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="bankruptcyModal" class="modal modal--bankruptcy" style="display: none;" aria-hidden="true">
+      <div class="modal__overlay"></div>
+      <div class="modal__content">
+        <h2>Club went bankrupt</h2>
+        <p class="modal__subtitle">Your organization is insolvent. You can look for a new job or start a new career.</p>
+        <div class="modal__actions">
+          <button type="button" id="btnBankruptcyJobOffers" class="btn btn--primary">View job offers</button>
+          <button type="button" id="btnBankruptcyNewCareer" class="btn btn--secondary">Start new career</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="notificationContainer" class="notification-container" aria-live="polite"></div>
+
+  <div id="confirmModal" class="modal-overlay is-hidden confirm-modal-overlay" aria-hidden="true">
+    <div class="modal confirm-modal">
+      <p id="confirmMessage" class="confirm-modal__message"></p>
+      <div class="modal__actions">
+        <button type="button" id="confirmCancel" class="btn btn--secondary">Cancel</button>
+        <button type="button" id="confirmAccept" class="btn btn--primary">Accept</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+
+</body>
+</html>
