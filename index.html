@@ -75,34 +75,45 @@
       <section class="page is-active" data-page="overview">
 
         <section class="panel panel--highlight" id="fixturePanel">
-          <h2 id="uiFixtureTitle">Next Fixture</h2>
-          <div class="fixture__matchday" id="uiMatchdayInfo">Matchday —</div>
-          <div class="fixture">
-            <div class="fixture__team">
-              <span class="badge badge--you" id="uiBadgeLeft">YOU</span>
-              <span id="uiTeamName">Nexus Core</span>
+          <div class="fixture-panel__row">
+            <div class="fixture-panel__left">
+              <h2 id="uiFixtureTitle">Next Fixture</h2>
+              <div class="fixture__matchday" id="uiMatchdayInfo">Matchday —</div>
+              <div class="fixture">
+                <div class="fixture__team">
+                  <span class="badge badge--you" id="uiBadgeLeft">YOU</span>
+                  <span id="uiTeamName">Nexus Core</span>
+                </div>
+                <div class="fixture__vs">VS</div>
+                <div class="fixture__team">
+                  <span class="badge" id="uiBadgeRight">OPP</span>
+                  <span id="uiOpponent">Crimson Arc</span>
+                </div>
+              </div>
+              <div class="fixture__meta">
+                <div class="fixture__meta-main">
+                  <div><strong>Meta:</strong> <span id="uiMetaName">—</span></div>
+                  <div><strong>Map:</strong> <span id="uiFixtureMap">—</span></div>
+                  <div><strong>Environment:</strong> Balanced</div>
+                  <div id="uiMetaDesc" class="fixture__meta-desc"></div>
+                </div>
+                <div class="fixture__power-vs-opp"><strong>Win probability:</strong> <span id="uiFixturePowerVsOpponent">—</span></div>
+              </div>
             </div>
-            <div class="fixture__vs">VS</div>
-            <div class="fixture__team">
-              <span class="badge" id="uiBadgeRight">OPP</span>
-              <span id="uiOpponent">Crimson Arc</span>
+            <div class="fixture-panel__right">
+              <div class="fixture__bootcamp" id="uiFixtureBootcamp">
+                <div class="fixture__bootcamp-title">Bootcamp</div>
+                <div class="fixture__bootcamp-body">No active bootcamp.</div>
+              </div>
             </div>
           </div>
-          <div class="fixture__meta">
-            <div class="fixture__meta-main">
-              <div><strong>Meta:</strong> <span id="uiMetaName">—</span></div>
-              <div><strong>Map:</strong> <span id="uiFixtureMap">—</span></div>
-              <div><strong>Environment:</strong> Balanced</div>
-              <div id="uiMetaDesc" class="fixture__meta-desc"></div>
+          <div class="fixture-panel__row fixture-panel__actions-row">
+            <div class="fixture-panel__left">
+              <div class="fixture__actions">
+                <button class="btn btn--primary" id="btnSim">Simulate Match</button>
+              </div>
             </div>
-            <div class="fixture__bootcamp" id="uiFixtureBootcamp">
-              <div class="fixture__bootcamp-title">Bootcamp</div>
-              <div class="fixture__bootcamp-body">No active bootcamp.</div>
-            </div>
-          </div>
-          <div class="fixture__actions">
-            <button class="btn btn--primary" id="btnSim">Simulate Match</button>
-            <div class="fixture__actions-right">
+            <div class="fixture-panel__right fixture-panel__right-actions">
               <button class="btn" id="btnSave">Save</button>
               <button class="btn" id="btnNewCareer">Start New Career</button>
             </div>

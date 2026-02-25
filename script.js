@@ -5013,6 +5013,21 @@ function initUI() {
     if (userTeam && teamPlanKeys.length && (userTeam.activeTeamTraining == null || userTeam.activeTeamTraining === '' || !teamPlanKeys.includes(userTeam.activeTeamTraining))) {
       userTeam.activeTeamTraining = teamPlanKeys[0];
     }
+    const powerVsOppEl = document.getElementById('uiFixturePowerVsOpponent');
+    if (powerVsOppEl) powerVsOppEl.textContent = '—';
+    function setPowerVsOpponent(myTeam, oppTeam) {
+      if (!powerVsOppEl || !myTeam || !oppTeam || !window.Nexus.calculateTeamMatchPower) return;
+      var defaultEnv = { coachQuality: 50, infrastructure: 50, psychologySupport: 50, pressure: 50 };
+      var envMy = (environmentMap && environmentMap[myTeam.name]) || defaultEnv;
+      var envOpp = (environmentMap && environmentMap[oppTeam.name]) || defaultEnv;
+      var dataMy = window.Nexus.calculateTeamMatchPower({ team: myTeam, environment: envMy, meta: currentMeta });
+      var dataOpp = window.Nexus.calculateTeamMatchPower({ team: oppTeam, environment: envOpp, meta: currentMeta });
+      var pMy = dataMy && dataMy.finalPower != null ? dataMy.finalPower : 0;
+      var pOpp = dataOpp && dataOpp.finalPower != null ? dataOpp.finalPower : 0;
+      if (typeof calculateWinProbability !== 'function') { powerVsOppEl.textContent = '—'; return; }
+      var prob = calculateWinProbability(pMy, pOpp);
+      powerVsOppEl.textContent = Math.round(prob * 100) + '%';
+    }
     const activeBootcamp = (userTeam && userTeam.activeBootcamp && (userTeam.activeBootcamp.remainingMatchdays || 0) > 0) ? userTeam.activeBootcamp : null;
     const trainingEl = document.getElementById('uiActiveTeamTraining');
     const trainingDescEl = document.getElementById('uiActiveTeamTrainingDesc');
@@ -5116,6 +5131,10 @@ function initUI() {
         const isYou = nextMatch.teamA.name === userTeam.name || nextMatch.teamB.name === userTeam.name;
         if (badgeLeft) { badgeLeft.textContent = isYou ? 'YOU' : 'OPP'; badgeLeft.classList.toggle('badge--you', isYou); }
         if (badgeRight) badgeRight.textContent = 'OPP';
+        if (isYou && typeof setPowerVsOpponent === 'function') {
+          var oppTeam = nextMatch.teamA.name === userTeam.name ? nextMatch.teamB : nextMatch.teamA;
+          setPowerVsOpponent(userTeam, oppTeam);
+        }
       } else {
         teamNameEl.textContent = 'Playoffs';
         oppEl.textContent = 'Round ' + bracket.round;
@@ -5186,6 +5205,10 @@ function initUI() {
       }
       if (badgeLeft) { badgeLeft.textContent = 'YOU'; badgeLeft.classList.add('badge--you'); }
       if (badgeRight) badgeRight.textContent = 'OPP';
+      if (typeof setPowerVsOpponent === 'function') {
+        var opponentTeam = ourMatch.teamA.name === userTeam.name ? ourMatch.teamB : ourMatch.teamA;
+        setPowerVsOpponent(userTeam, opponentTeam);
+      }
     } else {
       teamNameEl.textContent = '—';
       oppEl.textContent = 'Matchday ' + (dataForFixture.currentMatchday + 1) + ' (no your game)';
