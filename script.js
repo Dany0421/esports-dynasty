@@ -1489,11 +1489,12 @@ function getPlayerOverall(player) {
   return Math.round(avg);
 }
 
-function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoosts, bootcampEffect }) {
+function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoosts, bootcampEffect, useVariance }) {
   let total = 0;
   const infrastructure = (environment && environment.infrastructure != null) ? environment.infrastructure : 50;
   const varianceReduction = (infrastructure - 50) / 100;
   const hasBootcamp = !!bootcampEffect;
+  const applyVariance = useVariance !== false;
 
   STAT_KEYS.forEach(statKey => {
     const baseAdjusted = calculateRoleAdjustedCurrent({
@@ -1519,7 +1520,9 @@ function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoos
     const maxFromBase = baseAdjusted * (1 + MATCH_POWER_MAX_BONUS_FROM_BASE);
     adjusted = clamp(adjusted, minFromBase, maxFromBase);
 
-    const reducedVariance = 1 + (Math.random() - 0.5) * 0.2 * (1 - varianceReduction);
+    const reducedVariance = applyVariance
+      ? 1 + (Math.random() - 0.5) * 0.2 * (1 - varianceReduction)
+      : 1;
     adjusted *= reducedVariance;
 
     // Final stat recap AFTER variance to avoid random spikes.
@@ -1950,7 +1953,8 @@ window.Nexus.getMaxYouthAcademySlots = getMaxYouthAcademySlots;
 window.Nexus.syncTeamEnvironmentFromTiers = syncTeamEnvironmentFromTiers;
 window.Nexus.syncPressureToPrestige = syncPressureToPrestige;
 
-function calculateTeamMatchPower({ team, environment, meta }) {
+function calculateTeamMatchPower({ team, environment, meta }, options) {
+  const useVariance = (options && options.useVariance) !== false;
   const nexus = window.Nexus || {};
   const userTeam =
     (nexus.getUserTeam && nexus.getUserTeam()) ||
@@ -1983,7 +1987,8 @@ function calculateTeamMatchPower({ team, environment, meta }) {
       environment,
       meta,
       teamTrainingBoosts: boosts,
-      bootcampEffect: activeBootcampEffect
+      bootcampEffect: activeBootcampEffect,
+      useVariance: useVariance
     });
     return { player: p, matchPower: matchPower };
   });
@@ -2020,6 +2025,17 @@ function calculateTeamMatchPower({ team, environment, meta }) {
     lineup,
     playerPowers: playerPowers
   };
+}
+
+/**
+ * Deterministic team power for previews (dashboard win probability).
+ * Same logic as calculateTeamMatchPower but without variance — stable across refreshes.
+ */
+function calculateTeamExpectedPower(team, context) {
+  return calculateTeamMatchPower(
+    { team, environment: context.environment, meta: context.meta },
+    { useVariance: false }
+  );
 }
 
 function getTeamTrainingMatchModifier(team) {
@@ -2163,6 +2179,7 @@ window.Nexus.shouldTeamAdaptToMeta = shouldTeamAdaptToMeta;
 window.Nexus.adaptLineupToMeta = adaptLineupToMeta;
 window.Nexus.runPostMetaShiftAdaptation = runPostMetaShiftAdaptation;
 window.Nexus.calculateTeamMatchPower = calculateTeamMatchPower;
+window.Nexus.calculateTeamExpectedPower = calculateTeamExpectedPower;
 window.Nexus.simulateMatch = simulateMatch;
 window.Nexus.TEAM_TRAINING_PLAN_KEYS = TEAM_TRAINING_PLAN_KEYS;
 window.Nexus.TEAM_TRAINING_PLANS = TEAM_TRAINING_PLANS;
@@ -5016,12 +5033,12 @@ function initUI() {
     const powerVsOppEl = document.getElementById('uiFixturePowerVsOpponent');
     if (powerVsOppEl) powerVsOppEl.textContent = '—';
     function setPowerVsOpponent(myTeam, oppTeam) {
-      if (!powerVsOppEl || !myTeam || !oppTeam || !window.Nexus.calculateTeamMatchPower) return;
+      if (!powerVsOppEl || !myTeam || !oppTeam || !window.Nexus.calculateTeamExpectedPower) return;
       var defaultEnv = { coachQuality: 50, infrastructure: 50, psychologySupport: 50, pressure: 50 };
       var envMy = (environmentMap && environmentMap[myTeam.name]) || defaultEnv;
       var envOpp = (environmentMap && environmentMap[oppTeam.name]) || defaultEnv;
-      var dataMy = window.Nexus.calculateTeamMatchPower({ team: myTeam, environment: envMy, meta: currentMeta });
-      var dataOpp = window.Nexus.calculateTeamMatchPower({ team: oppTeam, environment: envOpp, meta: currentMeta });
+      var dataMy = window.Nexus.calculateTeamExpectedPower(myTeam, { environment: envMy, meta: currentMeta });
+      var dataOpp = window.Nexus.calculateTeamExpectedPower(oppTeam, { environment: envOpp, meta: currentMeta });
       var pMy = dataMy && dataMy.finalPower != null ? dataMy.finalPower : 0;
       var pOpp = dataOpp && dataOpp.finalPower != null ? dataOpp.finalPower : 0;
       if (typeof calculateWinProbability !== 'function') { powerVsOppEl.textContent = '—'; return; }
