@@ -3,6 +3,11 @@
 // This file keeps your current league/team generator vibe, BUT upgrades the schema so
 // meta/training/environment/finance can plug in later without refactors.
 
+(function() {
+'use strict';
+if (typeof window !== 'undefined' && window.__NEXUS_SCRIPT_LOADED__) return;
+if (typeof window !== 'undefined') window.__NEXUS_SCRIPT_LOADED__ = true;
+
 // --- Teams, name pools ---
 const TEAM_NAMES = [
   'Sentinels', 'Cloud9', 'NRG', 'Evil Geniuses', '100 Thieves', 'FURIA',
@@ -1807,41 +1812,43 @@ function simulateMatch({ teamA, teamB, environmentA, environmentB, meta }) {
 }
 
 var MVP_ROLE_WEIGHTS = { Duelist: 0.40, Controller: 0.30, Sentinel: 0.20, Initiator: 0.10 };
+var MVP_ROLE_ORDER = { Duelist: 0, Controller: 1, Sentinel: 2, Initiator: 3 };
 
 function pickMatchMVP(winningTeamName, playerPerformances) {
-  var list = (playerPerformances && playerPerformances[winningTeamName]) ? playerPerformances[winningTeamName] : [];
-  if (!list.length) return null;
+  if (!playerPerformances || typeof playerPerformances !== 'object') return null;
 
-  var roll = Math.random();
-  var roleWeights = MVP_ROLE_WEIGHTS;
-  var pickedRole = 'Duelist';
-  if (roll < roleWeights.Duelist) pickedRole = 'Duelist';
-  else if (roll < roleWeights.Duelist + roleWeights.Controller) pickedRole = 'Controller';
-  else if (roll < roleWeights.Duelist + roleWeights.Controller + roleWeights.Sentinel) pickedRole = 'Sentinel';
-  else pickedRole = 'Initiator';
-
-  var byRole = list.filter(function(x) {
-    var p = x.player;
-    var primary = (p && (p.assignedRole || (p.roleBias && p.roleBias.primaryRoleBias))) || '';
-    return primary === pickedRole;
-  });
-  var pool = byRole.length > 0 ? byRole : list;
-
-  var totalPower = 0;
-  var weights = pool.map(function(x) {
-    var noise = 0.9 + Math.random() * 0.2;
-    var w = Math.max(0.01, (x.matchPower || 0) * noise);
-    totalPower += w;
-    return w;
-  });
-  var i = 0;
-  var r = Math.random() * totalPower;
-  for (; i < pool.length; i++) {
-    r -= weights[i];
-    if (r <= 0) break;
+  var all = [];
+  var teamNames = Object.keys(playerPerformances);
+  for (var t = 0; t < teamNames.length; t++) {
+    var teamName = teamNames[t];
+    var list = playerPerformances[teamName];
+    if (!Array.isArray(list)) continue;
+    for (var i = 0; i < list.length; i++) {
+      var x = list[i];
+      var p = x && x.player;
+      if (!p) continue;
+      var rating = typeof x.rating === 'number' ? x.rating : (x.matchPower != null ? x.matchPower : 0);
+      var role = (p.assignedRole || (p.roleBias && p.roleBias.primaryRoleBias)) || '';
+      var roleOrder = MVP_ROLE_ORDER[role] != null ? MVP_ROLE_ORDER[role] : 99;
+      all.push({
+        player: p,
+        rating: rating,
+        matchPower: x.matchPower != null ? x.matchPower : 0,
+        isWinningTeam: teamName === winningTeamName,
+        roleOrder: roleOrder
+      });
+    }
   }
-  i = Math.min(i, pool.length - 1);
-  return pool[i] && pool[i].player ? pool[i].player : (list[0] && list[0].player) || null;
+  if (all.length === 0) return null;
+
+  all.sort(function(a, b) {
+    if (a.rating !== b.rating) return b.rating - a.rating;
+    if (a.isWinningTeam !== b.isWinningTeam) return a.isWinningTeam ? -1 : 1;
+    if (a.roleOrder !== b.roleOrder) return a.roleOrder - b.roleOrder;
+    return Math.random() < 0.5 ? -1 : 1;
+  });
+
+  return all[0].player;
 }
 
 function analyzeMetaImpactOnRoster(team, meta) {
@@ -6319,3 +6326,5 @@ if (document.readyState === 'loading') {
 } else {
   initUI();
 }
+
+})();
