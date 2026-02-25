@@ -1457,6 +1457,11 @@ function adaptLineupToMeta(team, meta) {
 
 // PART 2 — PLAYER POWER CALCULATION
 
+const MATCH_POWER_MIN_BONUS_FROM_BASE = -0.25; // cap total penalty to -25% of role-adjusted base
+const MATCH_POWER_MAX_BONUS_FROM_BASE = 0.25;  // cap total bonus to +25% of role-adjusted base
+const MATCH_POWER_HARD_MIN = 0;
+const MATCH_POWER_HARD_MAX = 99;
+
 function getPlayerOverall(player) {
   const avg = STAT_KEYS.reduce((sum, key) => sum + player.stats[key].current, 0) / STAT_KEYS.length;
   return Math.round(avg);
@@ -1468,24 +1473,32 @@ function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoos
   const varianceReduction = (infrastructure - 50) / 100;
 
   STAT_KEYS.forEach(statKey => {
-    let adjusted = calculateRoleAdjustedCurrent({
+    const baseAdjusted = calculateRoleAdjustedCurrent({
       player,
       statKey,
       environment,
       meta
     });
+    let adjusted = baseAdjusted;
     if (meta && meta.statBonuses && meta.statBonuses[statKey] != null) {
       adjusted *= meta.statBonuses[statKey];
     }
     if (teamTrainingBoosts && teamTrainingBoosts[statKey]) {
       adjusted *= teamTrainingBoosts[statKey];
     }
-    var reducedVariance = 1 + (Math.random() - 0.5) * 0.2 * (1 - varianceReduction);
+    // Recap stacked bonus/penalty relative to role-adjusted base BEFORE variance.
+    const minFromBase = baseAdjusted * (1 + MATCH_POWER_MIN_BONUS_FROM_BASE);
+    const maxFromBase = baseAdjusted * (1 + MATCH_POWER_MAX_BONUS_FROM_BASE);
+    adjusted = clamp(adjusted, minFromBase, maxFromBase);
+
+    const reducedVariance = 1 + (Math.random() - 0.5) * 0.2 * (1 - varianceReduction);
     adjusted *= reducedVariance;
-    total += adjusted;
+
+    // Final stat recap AFTER variance to avoid random spikes.
+    total += clamp(adjusted, MATCH_POWER_HARD_MIN, MATCH_POWER_HARD_MAX);
   });
 
-  return total / STAT_KEYS.length;
+  return clamp(total / STAT_KEYS.length, MATCH_POWER_HARD_MIN, MATCH_POWER_HARD_MAX);
 }
 
 // PART 3 — TEAM MATCH POWER
