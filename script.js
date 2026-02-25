@@ -408,8 +408,8 @@ window.Nexus = window.Nexus || {};
 window.Nexus.YOUTH_MARKET = window.Nexus.YOUTH_MARKET || [];
 
 function createYouthProspect() {
-  // Mostly 16–17; 15 is rare (~8%)
-  const age = chance(0.08) ? 15 : (chance(0.5) ? 16 : 17);
+  // Mostly 16–17; 15 is rare (~8%); 14 is very rare (~1.5%).
+  const age = chance(0.015) ? 14 : (chance(0.08) ? 15 : (chance(0.5) ? 16 : 17));
   const stats = {};
   STAT_KEYS.forEach(k => {
     const current = randomInt(35, 55);
@@ -583,7 +583,7 @@ function trainYouthProspect({ team, prospect, statKey, environment, season }) {
 window.Nexus.trainYouthProspect = trainYouthProspect;
 
 function generateYouthMarket() {
-  const count = randomInt(12, 15);
+  const count = 30;
   const prospects = [];
   for (let i = 0; i < count; i++) prospects.push(createYouthProspect());
   return prospects;
