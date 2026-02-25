@@ -208,15 +208,65 @@ body {
 
 .fixture__meta {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1.25rem;
+}
+
+.fixture__meta-main {
+  display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1.5rem;
   font-size: 0.85rem;
+  flex: 1;
+  min-width: 220px;
 }
 
 .fixture__meta-desc {
   flex-basis: 100%;
   font-size: 0.8rem;
   color: #8a9ba8;
+}
+
+.fixture__bootcamp {
+  min-width: 250px;
+  max-width: 320px;
+  background: #0f171d;
+  border: 1px solid #1a252e;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8rem;
+  color: #8a9ba8;
+}
+
+.fixture__bootcamp-title {
+  color: #d4a84b;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.fixture__bootcamp-body {
+  line-height: 1.35;
+}
+
+.fixture__bootcamp-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+}
+
+.fixture__bootcamp-list li {
+  margin: 0.2rem 0;
+}
+
+@media (max-width: 900px) {
+  .fixture__meta {
+    flex-direction: column;
+  }
+  .fixture__bootcamp {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
 }
 
 .fixture__matchday {

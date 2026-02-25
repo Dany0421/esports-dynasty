@@ -5014,6 +5014,7 @@ function initUI() {
     const activeBootcamp = (userTeam && userTeam.activeBootcamp && (userTeam.activeBootcamp.remainingMatchdays || 0) > 0) ? userTeam.activeBootcamp : null;
     const trainingEl = document.getElementById('uiActiveTeamTraining');
     const trainingDescEl = document.getElementById('uiActiveTeamTrainingDesc');
+    const fixtureBootcampEl = document.getElementById('uiFixtureBootcamp');
     const planName = (userTeam && userTeam.activeTeamTraining) ? userTeam.activeTeamTraining : '—';
     if (trainingEl) {
       trainingEl.textContent = activeBootcamp
@@ -5029,6 +5030,51 @@ function initUI() {
         desc = (planName !== '—' && plans && plans[planName] && plans[planName].description) ? ' — ' + plans[planName].description : '';
       }
       trainingDescEl.textContent = desc;
+    }
+    if (fixtureBootcampEl) {
+      if (!activeBootcamp) {
+        fixtureBootcampEl.innerHTML = '<div class="fixture__bootcamp-title">Bootcamp</div><div class="fixture__bootcamp-body">No active bootcamp.</div>';
+      } else {
+        const effect = activeBootcamp.effect || {};
+        const details = [];
+        if (effect.statBoosts) {
+          Object.keys(effect.statBoosts).forEach(function(statKey) {
+            const mult = effect.statBoosts[statKey];
+            if (mult == null) return;
+            const delta = Math.round((mult - 1) * 100);
+            const sign = delta >= 0 ? '+' : '';
+            details.push(sign + delta + '% ' + formatStatKey(statKey));
+          });
+        }
+        if (effect.allStatsBonus != null) {
+          const deltaAll = Math.round((effect.allStatsBonus - 1) * 100);
+          const signAll = deltaAll >= 0 ? '+' : '';
+          details.push(signAll + deltaAll + '% all stats');
+        }
+        if (effect.synergyBonus != null) {
+          const syn = Math.round(effect.synergyBonus * 100);
+          details.push('+' + syn + '% team synergy');
+        }
+        if (effect.metaFavoredBonus != null) {
+          const fav = Math.round(effect.metaFavoredBonus * 100);
+          details.push('+' + fav + '% favored-role meta bonus');
+        }
+        if (effect.metaNerfedReduction != null) {
+          const red = Math.round(effect.metaNerfedReduction * 100);
+          details.push(red + '% nerfed-role penalty reduction');
+        }
+        if (effect.pressureReduction != null) {
+          const pressure = Math.round(effect.pressureReduction * 100);
+          details.push('-' + pressure + '% pressure impact');
+        }
+        if (effect.mentalBoost != null) {
+          details.push('+' + effect.mentalBoost + ' effective Mental');
+        }
+        const detailsHtml = details.length
+          ? '<ul class="fixture__bootcamp-list">' + details.map(function(item) { return '<li>' + item + '</li>'; }).join('') + '</ul>'
+          : '';
+        fixtureBootcampEl.innerHTML = '<div class="fixture__bootcamp-title">' + activeBootcamp.name + ' · ' + activeBootcamp.remainingMatchdays + ' matchday(s) left</div><div class="fixture__bootcamp-body">Effects active this matchday:</div>' + detailsHtml;
+      }
     }
     const phase = seasonData.phase || 'regular';
     const matchdayInfoEl = document.getElementById('uiMatchdayInfo');
