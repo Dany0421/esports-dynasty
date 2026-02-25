@@ -395,6 +395,7 @@ function createTeam(teamName, tier = 'Main') {
     bench,
     players,
     youthAcademy: [],
+    activeBootcamp: null,
     tier,
     prestige: tier === 'Main' ? 60 + Math.floor(Math.random() * 20) : 30 + Math.floor(Math.random() * 15),
     budgetMultiplier: tier === 'Main' ? 1.0 : 0.7
@@ -767,7 +768,7 @@ function createMeta({
 
 // 2. EFFECTIVE CAP CALCULATION
 
-function calculateEffectiveCap({ player, statKey, environment, meta }) {
+function calculateEffectiveCap({ player, statKey, environment, meta, bootcampEffect }) {
   const stat = player.stats[statKey];
   const baseMax = stat.maxCap;
 
@@ -780,12 +781,18 @@ function calculateEffectiveCap({ player, statKey, environment, meta }) {
 
   // Pressure vs Mental interaction (psychology reduces effective pressure)
   const mental = (player.stats.mental && player.stats.mental.current != null) ? player.stats.mental.current : 50;
+  const mentalBoost = (bootcampEffect && bootcampEffect.mentalBoost != null) ? bootcampEffect.mentalBoost : 0;
+  const effectiveMental = clamp(mental + mentalBoost, 1, 99);
   const rawPressure = environment.pressure != null ? environment.pressure : 50;
   const psychSupport = environment.psychologySupport != null ? environment.psychologySupport : 50;
   const psychTier = PSYCHOLOGY_TIERS && PSYCHOLOGY_TIERS.find(function(t) { return t.support === psychSupport; });
   const pressureReduction = (psychTier && psychTier.pressureReduction != null) ? psychTier.pressureReduction : 0;
-  const effectivePressure = rawPressure * (1 - pressureReduction);
-  const pressureImpact = (effectivePressure - mental) / 100;
+  let effectivePressure = rawPressure * (1 - pressureReduction);
+  if (bootcampEffect && bootcampEffect.pressureReduction != null) {
+    const extraReduction = clamp(bootcampEffect.pressureReduction, 0, 0.9);
+    effectivePressure *= (1 - extraReduction);
+  }
+  const pressureImpact = (effectivePressure - effectiveMental) / 100;
   modifier -= pressureImpact * 0.05 * baseMax;
 
   // Meta alignment bonus (if stat aligns with favored role bias)
@@ -805,9 +812,9 @@ function calculateEffectiveCap({ player, statKey, environment, meta }) {
 
 // 3. EFFECTIVE CURRENT VALUE
 
-function calculateEffectiveCurrent({ player, statKey, environment, meta }) {
+function calculateEffectiveCurrent({ player, statKey, environment, meta, bootcampEffect }) {
   const stat = player.stats[statKey];
-  const effectiveCap = calculateEffectiveCap({ player, statKey, environment, meta });
+  const effectiveCap = calculateEffectiveCap({ player, statKey, environment, meta, bootcampEffect });
 
   // Current cannot exceed effective cap
   return Math.min(stat.current, effectiveCap);
@@ -1182,16 +1189,26 @@ function getRoleFitMultiplier(player) {
 const META_FAVORED_BONUS = 1.12;   // +12% when role is in meta.favoredRoles
 const META_NERFED_PENALTY = 0.90;  // -10% when role is in meta.nerfedRoles
 
-function calculateRoleAdjustedCurrent({ player, statKey, environment, meta }) {
-  const baseEffective = calculateEffectiveCurrent({ player, statKey, environment, meta });
+function calculateRoleAdjustedCurrent({ player, statKey, environment, meta, bootcampEffect }) {
+  const baseEffective = calculateEffectiveCurrent({ player, statKey, environment, meta, bootcampEffect });
   let value = baseEffective * getRoleFitMultiplier(player);
 
   const role = player.assignedRole || player.roleBias.primaryRoleBias;
   if (meta && Array.isArray(meta.favoredRoles) && meta.favoredRoles.includes(role)) {
-    value *= META_FAVORED_BONUS;
+    let favoredBonus = META_FAVORED_BONUS;
+    if (bootcampEffect && bootcampEffect.metaFavoredBonus != null) {
+      favoredBonus += bootcampEffect.metaFavoredBonus;
+    }
+    value *= favoredBonus;
   }
   if (meta && Array.isArray(meta.nerfedRoles) && meta.nerfedRoles.includes(role)) {
-    value *= META_NERFED_PENALTY;
+    let nerfedPenalty = META_NERFED_PENALTY;
+    if (bootcampEffect && bootcampEffect.metaNerfedReduction != null) {
+      const reduction = clamp(bootcampEffect.metaNerfedReduction, 0, 1);
+      const penaltyStrength = 1 - META_NERFED_PENALTY;
+      nerfedPenalty = 1 - (penaltyStrength * (1 - reduction));
+    }
+    value *= nerfedPenalty;
   }
 
   return Math.round(Math.max(0, Math.min(99, value)));
@@ -1302,7 +1319,7 @@ function detectRhythmConflicts(players) {
 
 // 5. FINAL SYNERGY SCORE
 
-function calculateTeamSynergy(players, meta, environment) {
+function calculateTeamSynergy(players, meta, environment, bootcampEffect) {
   if (players.length !== 5) {
     throw new Error('Synergy requires exactly 5 players.');
   }
@@ -1349,6 +1366,10 @@ function calculateTeamSynergy(players, meta, environment) {
     if (psychTier && psychTier.synergyBonus != null) {
       synergy += psychTier.synergyBonus;
     }
+  }
+
+  if (bootcampEffect && bootcampEffect.synergyBonus != null) {
+    synergy += bootcampEffect.synergyBonus;
   }
 
   return {
@@ -1467,23 +1488,29 @@ function getPlayerOverall(player) {
   return Math.round(avg);
 }
 
-function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoosts }) {
+function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoosts, bootcampEffect }) {
   let total = 0;
   const infrastructure = (environment && environment.infrastructure != null) ? environment.infrastructure : 50;
   const varianceReduction = (infrastructure - 50) / 100;
+  const hasBootcamp = !!bootcampEffect;
 
   STAT_KEYS.forEach(statKey => {
     const baseAdjusted = calculateRoleAdjustedCurrent({
       player,
       statKey,
       environment,
-      meta
+      meta,
+      bootcampEffect
     });
     let adjusted = baseAdjusted;
     if (meta && meta.statBonuses && meta.statBonuses[statKey] != null) {
       adjusted *= meta.statBonuses[statKey];
     }
-    if (teamTrainingBoosts && teamTrainingBoosts[statKey]) {
+    if (bootcampEffect && bootcampEffect.statBoosts && bootcampEffect.statBoosts[statKey] != null) {
+      adjusted *= bootcampEffect.statBoosts[statKey];
+    } else if (bootcampEffect && bootcampEffect.allStatsBonus != null) {
+      adjusted *= bootcampEffect.allStatsBonus;
+    } else if (!hasBootcamp && teamTrainingBoosts && teamTrainingBoosts[statKey]) {
       adjusted *= teamTrainingBoosts[statKey];
     }
     // Recap stacked bonus/penalty relative to role-adjusted base BEFORE variance.
@@ -1561,10 +1588,203 @@ const SPONSOR_TIERS = [
   { id: 'global-bank', name: 'Global Banking Group', tier: 'Hard', totalPay: 700000, rules: [{ type: 'minWins', value: 9, description: 'Win at least 9 matches' }, { type: 'minPlacement', value: 3, description: 'Finish in top 3' }, { type: 'useYouth', value: 1, description: 'Promote 1 youth player during season' }], description: 'Premium sponsorship for elite organizations only' }
 ];
 
+const BOOTCAMP_TYPES = [
+  {
+    id: 'meta-adaptation',
+    icon: 'META',
+    name: 'Meta Adaptation Camp',
+    description: 'Fast prep to exploit favored roles and soften nerfs.',
+    effectDescription: '+8% favored-role meta bonus, 12% nerf reduction',
+    cost: 60000,
+    duration: 3,
+    effect: {
+      type: 'meta',
+      metaFavoredBonus: 0.08,
+      metaNerfedReduction: 0.12
+    }
+  },
+  {
+    id: 'mechanical-bootcamp',
+    icon: 'MECH',
+    name: 'Mechanical Skill Camp',
+    description: 'Raw dueling focus: aim, reactions, and snap decisions.',
+    effectDescription: '+10% aim, +8% reaction, +6% decision speed',
+    cost: 55000,
+    duration: 3,
+    effect: {
+      type: 'stats',
+      statBoosts: {
+        aim: 1.10,
+        reaction: 1.08,
+        decisionSpeed: 1.06
+      }
+    }
+  },
+  {
+    id: 'tactical-bootcamp',
+    icon: 'TACT',
+    name: 'Tactical IQ Camp',
+    description: 'Macro-heavy prep focused on utility and spacing.',
+    effectDescription: '+10% game sense, +8% utility IQ, +6% positioning',
+    cost: 55000,
+    duration: 3,
+    effect: {
+      type: 'stats',
+      statBoosts: {
+        gameSense: 1.10,
+        utilityIQ: 1.08,
+        positioning: 1.06
+      }
+    }
+  },
+  {
+    id: 'synergy-bootcamp',
+    icon: 'SYNC',
+    name: 'Team Synergy Camp',
+    description: 'Team coordination drills for cleaner executes and retakes.',
+    effectDescription: '+6% team synergy',
+    cost: 50000,
+    duration: 4,
+    effect: {
+      type: 'synergy',
+      synergyBonus: 0.06
+    }
+  },
+  {
+    id: 'mental-bootcamp',
+    icon: 'MIND',
+    name: 'Mental Resilience Camp',
+    description: 'Pressure-control sessions with focused resilience routines.',
+    effectDescription: '-15% pressure impact and +5 effective mental',
+    cost: 40000,
+    duration: 5,
+    effect: {
+      type: 'mental',
+      pressureReduction: 0.15,
+      mentalBoost: 5
+    }
+  },
+  {
+    id: 'championship-bootcamp',
+    icon: 'CHMP',
+    name: 'Championship Prep',
+    description: 'High-intensity short prep for title races.',
+    effectDescription: '+12% all stats and +8% team synergy',
+    cost: 120000,
+    duration: 2,
+    effect: {
+      type: 'championship',
+      allStatsBonus: 1.12,
+      synergyBonus: 0.08
+    }
+  }
+];
+
+function getBootcampById(bootcampId) {
+  if (!bootcampId) return null;
+  return BOOTCAMP_TYPES.find(function(b) { return b.id === bootcampId; }) || null;
+}
+
+function getTeamActiveBootcampEffect(team) {
+  if (!team || !team.activeBootcamp) return null;
+  const remaining = team.activeBootcamp.remainingMatchdays != null ? team.activeBootcamp.remainingMatchdays : 0;
+  if (remaining <= 0) return null;
+  return team.activeBootcamp.effect || null;
+}
+
+function activateBootcamp(team, bootcampId) {
+  const bootcamp = getBootcampById(bootcampId);
+  if (!team || !bootcamp) return { success: false, message: 'Bootcamp not found.' };
+  if (team.activeBootcamp && (team.activeBootcamp.remainingMatchdays || 0) > 0) {
+    return { success: false, message: 'A bootcamp is already active.' };
+  }
+  if (!team.finance) return { success: false, message: 'No finance data available.' };
+  const capital = team.finance.capital || 0;
+  if (capital < bootcamp.cost) return { success: false, message: 'Insufficient funds.' };
+
+  team.finance.capital = capital - bootcamp.cost;
+  team.activeBootcamp = {
+    id: bootcamp.id,
+    name: bootcamp.name,
+    remainingMatchdays: bootcamp.duration,
+    effect: JSON.parse(JSON.stringify(bootcamp.effect || {}))
+  };
+
+  return {
+    success: true,
+    bootcamp: team.activeBootcamp,
+    message: 'Activated ' + bootcamp.name + ' for ' + bootcamp.duration + ' matchdays.'
+  };
+}
+
+function getTeamReputationScore(team) {
+  if (!team) return 50;
+  if (team.reputation != null) return team.reputation;
+  if (team.prestige != null) return team.prestige;
+  return 50;
+}
+
+function selectRandomBootcamp(team) {
+  if (!team || !team.finance) return null;
+  if (team.activeBootcamp && (team.activeBootcamp.remainingMatchdays || 0) > 0) return null;
+  const affordable = BOOTCAMP_TYPES.filter(function(type) {
+    return (team.finance.capital || 0) >= type.cost;
+  });
+  if (!affordable.length) return null;
+  return affordable[randomInt(0, affordable.length - 1)];
+}
+
+function shouldAIActivateBootcamp(aiTeam, opponentTeam) {
+  if (!aiTeam || !opponentTeam || aiTeam === opponentTeam) return null;
+  const userTeam = (window.Nexus.getUserTeam && window.Nexus.getUserTeam()) || (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
+  if (userTeam && aiTeam.name === userTeam.name) return null;
+  if (aiTeam.activeBootcamp && (aiTeam.activeBootcamp.remainingMatchdays || 0) > 0) return null;
+
+  const aiReputation = getTeamReputationScore(aiTeam);
+  const oppReputation = getTeamReputationScore(opponentTeam);
+  if (oppReputation <= aiReputation) return null;
+
+  if (Math.random() >= 0.7) return null;
+  const randomBootcamp = selectRandomBootcamp(aiTeam);
+  if (!randomBootcamp) return null;
+
+  const result = activateBootcamp(aiTeam, randomBootcamp.id);
+  if (result && result.success && userTeam && opponentTeam.name === userTeam.name && window.Nexus.showNotification) {
+    window.Nexus.showNotification(aiTeam.name + ' activated ' + randomBootcamp.name + ' before facing you!', 'info', 5500);
+  }
+  return result;
+}
+
+function tickBootcampDuration(teams) {
+  const list = Array.isArray(teams) ? teams : [];
+  const userTeam = (window.Nexus.getUserTeam && window.Nexus.getUserTeam()) || (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
+  let expiredUserBootcamp = null;
+
+  list.forEach(function(team) {
+    if (!team || !team.activeBootcamp) return;
+    const remaining = team.activeBootcamp.remainingMatchdays != null ? team.activeBootcamp.remainingMatchdays : 0;
+    const nextRemaining = remaining - 1;
+    team.activeBootcamp.remainingMatchdays = nextRemaining;
+    if (nextRemaining <= 0) {
+      if (userTeam && userTeam.name === team.name) {
+        expiredUserBootcamp = team.activeBootcamp.name || 'Bootcamp';
+      }
+      team.activeBootcamp = null;
+    }
+  });
+
+  if (expiredUserBootcamp && window.Nexus.showNotification) {
+    window.Nexus.showNotification(expiredUserBootcamp + ' expired.', 'info', 5500);
+  }
+
+  return { userExpiredBootcamp: expiredUserBootcamp };
+}
+
 window.Nexus.COACH_TIERS = COACH_TIERS;
 window.Nexus.FACILITY_TIERS = FACILITY_TIERS;
 window.Nexus.PSYCHOLOGY_TIERS = PSYCHOLOGY_TIERS;
 window.Nexus.SPONSOR_TIERS = SPONSOR_TIERS;
+window.Nexus.BOOTCAMP_TYPES = BOOTCAMP_TYPES;
 
 function getCoachTier(team) {
   const level = (team && (team.coachTierLevel != null ? team.coachTierLevel : 1)) || 1;
@@ -1680,6 +1900,12 @@ function applySponsorSeasonEnd(team, seasonStandings) {
 window.Nexus.selectSponsor = selectSponsor;
 window.Nexus.checkSponsorRules = checkSponsorRules;
 window.Nexus.applySponsorSeasonEnd = applySponsorSeasonEnd;
+window.Nexus.getBootcampById = getBootcampById;
+window.Nexus.getTeamActiveBootcampEffect = getTeamActiveBootcampEffect;
+window.Nexus.activateBootcamp = activateBootcamp;
+window.Nexus.selectRandomBootcamp = selectRandomBootcamp;
+window.Nexus.shouldAIActivateBootcamp = shouldAIActivateBootcamp;
+window.Nexus.tickBootcampDuration = tickBootcampDuration;
 window.Nexus.getCoachTier = getCoachTier;
 window.Nexus.getFacilityTier = getFacilityTier;
 window.Nexus.getPsychologyTier = getPsychologyTier;
@@ -1707,15 +1933,22 @@ function calculateTeamMatchPower({ team, environment, meta }) {
     lineup = buildBestLineup(team, meta);
   }
 
-  const synergyData = calculateTeamSynergy(lineup, meta, environment);
+  const activeBootcampEffect = getTeamActiveBootcampEffect(team);
+  const synergyData = calculateTeamSynergy(lineup, meta, environment, activeBootcampEffect);
   const synergyMultiplier = synergyData.synergyMultiplier;
 
-  const boosts = (team.activeTeamTraining && TEAM_TRAINING_PLANS[team.activeTeamTraining])
+  const boosts = (!activeBootcampEffect && team.activeTeamTraining && TEAM_TRAINING_PLANS[team.activeTeamTraining])
     ? TEAM_TRAINING_PLANS[team.activeTeamTraining].boosts
     : {};
 
   const playerPowers = lineup.map(function(p) {
-    const matchPower = calculatePlayerMatchPower({ player: p, environment, meta, teamTrainingBoosts: boosts });
+    const matchPower = calculatePlayerMatchPower({
+      player: p,
+      environment,
+      meta,
+      teamTrainingBoosts: boosts,
+      bootcampEffect: activeBootcampEffect
+    });
     return { player: p, matchPower: matchPower };
   });
 
@@ -2051,6 +2284,10 @@ function playNextMatchday(season, environmentMap, meta) {
       window.Nexus.fillEmptyRosterSlotsForMatch(match.teamA);
       window.Nexus.fillEmptyRosterSlotsForMatch(match.teamB);
     }
+    if (window.Nexus.shouldAIActivateBootcamp) {
+      window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
+      window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+    }
     const result = simulateMatch({
       teamA: match.teamA,
       teamB: match.teamB,
@@ -2207,6 +2444,10 @@ function playPlayoffRound(season, environmentMap, meta) {
   const roundResults = [];
 
   bracket.matches.forEach(match => {
+    if (window.Nexus.shouldAIActivateBootcamp) {
+      window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
+      window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+    }
     const result = simulateMatch({
       teamA: match.teamA,
       teamB: match.teamB,
@@ -2272,6 +2513,10 @@ function resolveRelegationTournament({
     const challenger = safeChallenger[i];
     if (!main || !challenger || !main.name || !challenger.name) continue;
 
+    if (window.Nexus.shouldAIActivateBootcamp) {
+      window.Nexus.shouldAIActivateBootcamp(main, challenger);
+      window.Nexus.shouldAIActivateBootcamp(challenger, main);
+    }
     const matchResult = simulateMatch({
       teamA: main,
       teamB: challenger,
@@ -3159,6 +3404,13 @@ function isAnyTeamBankrupt(season) {
 const _originalPlayNextStage = window.Nexus.playNextStage;
 window.Nexus.playNextStage = function(season, environmentMap, meta) {
   const result = _originalPlayNextStage(season, environmentMap, meta);
+  const hadStageMatches = !!(
+    result && (
+      (result.matchdayResults && result.matchdayResults.length > 0) ||
+      (result.roundResults && result.roundResults.length > 0) ||
+      (result.relegationMatchResults && result.relegationMatchResults.length > 0)
+    )
+  );
   if (result && result.finished && season.phase === 'finished' && isAnyTeamBankrupt(season)) {
     result.bankrupt = true;
     season.bankrupt = true;
@@ -3262,6 +3514,13 @@ window.Nexus.playNextStage = function(season, environmentMap, meta) {
         }
       });
     });
+  }
+  if (hadStageMatches && window.Nexus.tickBootcampDuration) {
+    const allTeamsForTick = [
+      ...(window.Nexus.LEAGUE || []),
+      ...(window.Nexus.CHALLENGER_LEAGUE || [])
+    ].filter(Boolean);
+    window.Nexus.tickBootcampDuration(Array.from(new Set(allTeamsForTick)));
   }
   if (result.finished && season.phase === 'finished') {
     if (window.Nexus.applyPlacementBonus) window.Nexus.applyPlacementBonus(season);
@@ -3579,6 +3838,7 @@ function initUI() {
       [league, challengerLeague].forEach(teams => {
         (teams || []).forEach(team => {
           team.youthAcademy = team.youthAcademy || [];
+          if (team.activeBootcamp === undefined) team.activeBootcamp = null;
           (team.youthAcademy || []).forEach(function(p) {
             if (Nexus.ensureYouthProspectRoleBias) Nexus.ensureYouthProspectRoleBias(p);
           });
@@ -3687,6 +3947,7 @@ function initUI() {
         if (team.coachTierLevel == null) team.coachTierLevel = 1;
         if (team.facilityTierLevel == null) team.facilityTierLevel = 1;
         if (team.psychologyLevel == null) team.psychologyLevel = 1;
+        if (team.activeBootcamp === undefined) team.activeBootcamp = null;
         if (Nexus.syncTeamEnvironmentFromTiers) Nexus.syncTeamEnvironmentFromTiers(team, environmentMap);
       });
     });
@@ -3745,6 +4006,7 @@ function initUI() {
       userTeamObj.activeTeamTraining = (userTeamObj.activeTeamTraining && teamTrainingKeys.includes(userTeamObj.activeTeamTraining))
         ? userTeamObj.activeTeamTraining : teamTrainingKeys[0];
       allTeamsForTraining.forEach(team => {
+        if (team.activeBootcamp === undefined) team.activeBootcamp = null;
         if (team === userTeamObj) return;
         team.activeTeamTraining = teamTrainingKeys[Math.floor(Math.random() * teamTrainingKeys.length)];
       });
@@ -4423,7 +4685,7 @@ function initUI() {
     if (bankruptcyModalOnLoad) bankruptcyModalOnLoad.style.display = 'flex';
   }
 
-  // ===== OPERATIONS (Coaches, Facilities, Sponsors) =====
+  // ===== OPERATIONS (Coaches, Facilities, Psychology, Sponsors, Bootcamp) =====
   var operationsTabBtns = document.querySelectorAll('.operations-tab');
   var operationsPanels = document.querySelectorAll('.operations-panel');
   var activeOperationsPanel = 'coaches';
@@ -4435,7 +4697,8 @@ function initUI() {
     var facilitiesEl = document.getElementById('operationsFacilities');
     var psychologyEl = document.getElementById('operationsPsychology');
     var sponsorsEl = document.getElementById('operationsSponsors');
-    if (!coachesEl || !facilitiesEl || !psychologyEl || !sponsorsEl) return;
+    var bootcampEl = document.getElementById('operationsBootcamp');
+    if (!coachesEl || !facilitiesEl || !psychologyEl || !sponsorsEl || !bootcampEl) return;
 
     if (activeOperationsPanel === 'coaches') {
       var coachTiers = window.Nexus.COACH_TIERS || [];
@@ -4573,6 +4836,42 @@ function initUI() {
         });
       }
     }
+
+    if (activeOperationsPanel === 'bootcamp') {
+      var bootcampTypes = window.Nexus.BOOTCAMP_TYPES || [];
+      var activeBootcamp = (userTeam.activeBootcamp && (userTeam.activeBootcamp.remainingMatchdays || 0) > 0) ? userTeam.activeBootcamp : null;
+      var statusHtml = activeBootcamp
+        ? '<div class="operations-bootcamp-status is-active"><strong>Active:</strong> ' + activeBootcamp.name + ' <span class="operations-tier-level">' + activeBootcamp.remainingMatchdays + ' matchday(s) left</span></div>'
+        : '<div class="operations-bootcamp-status"><strong>No active bootcamp.</strong> Activating one temporarily replaces team training effects.</div>';
+
+      bootcampEl.innerHTML = '<div class="operations-bootcamp">' + statusHtml + '<div class="operations-bootcamp-grid">' + bootcampTypes.map(function(b) {
+        var hasFinance = !!(userTeam.finance);
+        var canAfford = hasFinance && (userTeam.finance.capital || 0) >= (b.cost || 0);
+        var disabledByActive = !!activeBootcamp;
+        var disabled = disabledByActive || !canAfford;
+        var btnLabel = disabledByActive ? 'Bootcamp active' : (canAfford ? 'Activate' : 'Insufficient funds');
+        var activeClass = (activeBootcamp && activeBootcamp.id === b.id) ? ' is-active' : '';
+        var durationText = (b.duration || 0) + ' matchday(s)';
+        var costText = '$' + (b.cost || 0).toLocaleString();
+        return '<div class="operations-bootcamp-card' + activeClass + '"><div class="operations-bootcamp-card__header"><span class="operations-bootcamp-icon">' + (b.icon || 'CAMP') + '</span><strong class="operations-bootcamp-name">' + (b.name || 'Bootcamp') + '</strong></div><p class="operations-bootcamp-desc">' + (b.description || '') + '</p><p class="operations-bootcamp-effect">' + (b.effectDescription || '') + '</p><div class="operations-bootcamp-meta"><span>Cost: ' + costText + '</span><span>Duration: ' + durationText + '</span></div><button type="button" class="btn btn--primary operations-bootcamp-btn operations-activate-bootcamp" data-bootcamp-id="' + (b.id || '') + '"' + (disabled ? ' disabled' : '') + '>' + btnLabel + '</button></div>';
+      }).join('') + '</div></div>';
+
+      bootcampEl.querySelectorAll('.operations-activate-bootcamp').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var bootcampId = btn.getAttribute('data-bootcamp-id');
+          if (!bootcampId || !userTeamRef()) return;
+          var result = window.Nexus.activateBootcamp && window.Nexus.activateBootcamp(userTeamRef(), bootcampId);
+          if (result && result.success) {
+            showNotification(result.message || 'Bootcamp activated.', 'success');
+            saveGameState();
+            updateOperationsUI();
+            if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
+          } else {
+            showNotification(result && result.message ? result.message : 'Could not activate bootcamp.', 'error');
+          }
+        });
+      });
+    }
   }
 
   if (operationsTabBtns.length) {
@@ -4658,13 +4957,23 @@ function initUI() {
     if (userTeam && teamPlanKeys.length && (userTeam.activeTeamTraining == null || userTeam.activeTeamTraining === '' || !teamPlanKeys.includes(userTeam.activeTeamTraining))) {
       userTeam.activeTeamTraining = teamPlanKeys[0];
     }
+    const activeBootcamp = (userTeam && userTeam.activeBootcamp && (userTeam.activeBootcamp.remainingMatchdays || 0) > 0) ? userTeam.activeBootcamp : null;
     const trainingEl = document.getElementById('uiActiveTeamTraining');
     const trainingDescEl = document.getElementById('uiActiveTeamTrainingDesc');
     const planName = (userTeam && userTeam.activeTeamTraining) ? userTeam.activeTeamTraining : '—';
-    if (trainingEl) trainingEl.textContent = planName;
+    if (trainingEl) {
+      trainingEl.textContent = activeBootcamp
+        ? (activeBootcamp.name + ' (' + activeBootcamp.remainingMatchdays + 'd)')
+        : planName;
+    }
     if (trainingDescEl) {
-      const plans = window.Nexus.TEAM_TRAINING_PLANS;
-      const desc = (planName !== '—' && plans && plans[planName] && plans[planName].description) ? ' — ' + plans[planName].description : '';
+      let desc = '';
+      if (activeBootcamp) {
+        desc = ' — Bootcamp active (team training effects replaced)';
+      } else {
+        const plans = window.Nexus.TEAM_TRAINING_PLANS;
+        desc = (planName !== '—' && plans && plans[planName] && plans[planName].description) ? ' — ' + plans[planName].description : '';
+      }
       trainingDescEl.textContent = desc;
     }
     const phase = seasonData.phase || 'regular';

@@ -531,6 +531,88 @@ body {
   margin: 0 0 0.5rem;
 }
 
+.operations-bootcamp {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.operations-bootcamp-status {
+  padding: 0.9rem 1rem;
+  border-radius: 8px;
+  border: 1px solid #1a252e;
+  background: #101820;
+  color: #8a9ba8;
+}
+.operations-bootcamp-status.is-active {
+  border-color: #d4a84b;
+  box-shadow: 0 0 0 1px rgba(212, 168, 75, 0.35);
+}
+.operations-bootcamp-status strong {
+  color: #e4e8ec;
+}
+.operations-bootcamp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+.operations-bootcamp-card {
+  padding: 1rem;
+  background: #131c24;
+  border-radius: 8px;
+  border: 1px solid #1a252e;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.operations-bootcamp-card.is-active {
+  border-color: #d4a84b;
+  box-shadow: 0 0 0 1px rgba(212, 168, 75, 0.45);
+}
+.operations-bootcamp-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.operations-bootcamp-icon {
+  min-width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #0b1218;
+  background: #d4a84b;
+}
+.operations-bootcamp-name {
+  color: #e4e8ec;
+  font-size: 0.98rem;
+}
+.operations-bootcamp-desc {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #8a9ba8;
+  line-height: 1.4;
+}
+.operations-bootcamp-effect {
+  margin: 0;
+  font-size: 0.84rem;
+  color: #c3ced8;
+}
+.operations-bootcamp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  font-size: 0.83rem;
+  color: #6b7c89;
+}
+.operations-bootcamp-btn {
+  margin-top: 0.35rem;
+  align-self: flex-start;
+}
+
 /* Tables */
 .prospect-table, #standings, #schedule {
   margin-top: 0.75rem;
