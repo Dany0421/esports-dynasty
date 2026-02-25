@@ -396,6 +396,7 @@ function createTeam(teamName, tier = 'Main') {
     players,
     youthAcademy: [],
     activeBootcamp: null,
+    bootcampUsageThisSeason: {},
     tier,
     prestige: tier === 'Main' ? 60 + Math.floor(Math.random() * 20) : 30 + Math.floor(Math.random() * 15),
     budgetMultiplier: tier === 'Main' ? 1.0 : 0.7
@@ -1685,6 +1686,35 @@ function getBootcampById(bootcampId) {
   return BOOTCAMP_TYPES.find(function(b) { return b.id === bootcampId; }) || null;
 }
 
+function initializeBootcampSeasonUsage(team) {
+  if (!team) return {};
+  if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') {
+    team.bootcampUsageThisSeason = {};
+  }
+  return team.bootcampUsageThisSeason;
+}
+
+function hasTeamUsedBootcampThisSeason(team, bootcampId) {
+  if (!team || !bootcampId) return false;
+  const usage = initializeBootcampSeasonUsage(team);
+  return !!usage[bootcampId];
+}
+
+function markBootcampUsedThisSeason(team, bootcampId) {
+  if (!team || !bootcampId) return;
+  const usage = initializeBootcampSeasonUsage(team);
+  usage[bootcampId] = true;
+}
+
+function resetBootcampUsageForSeason(teams) {
+  const list = Array.isArray(teams) ? teams : [];
+  list.forEach(function(team) {
+    if (!team) return;
+    team.activeBootcamp = null;
+    team.bootcampUsageThisSeason = {};
+  });
+}
+
 function getTeamActiveBootcampEffect(team) {
   if (!team || !team.activeBootcamp) return null;
   const remaining = team.activeBootcamp.remainingMatchdays != null ? team.activeBootcamp.remainingMatchdays : 0;
@@ -1695,6 +1725,9 @@ function getTeamActiveBootcampEffect(team) {
 function activateBootcamp(team, bootcampId) {
   const bootcamp = getBootcampById(bootcampId);
   if (!team || !bootcamp) return { success: false, message: 'Bootcamp not found.' };
+  if (hasTeamUsedBootcampThisSeason(team, bootcamp.id)) {
+    return { success: false, message: 'This bootcamp is locked for the rest of the season.' };
+  }
   if (team.activeBootcamp && (team.activeBootcamp.remainingMatchdays || 0) > 0) {
     return { success: false, message: 'A bootcamp is already active.' };
   }
@@ -1709,6 +1742,7 @@ function activateBootcamp(team, bootcampId) {
     remainingMatchdays: bootcamp.duration,
     effect: JSON.parse(JSON.stringify(bootcamp.effect || {}))
   };
+  markBootcampUsedThisSeason(team, bootcamp.id);
 
   return {
     success: true,
@@ -1728,7 +1762,7 @@ function selectRandomBootcamp(team) {
   if (!team || !team.finance) return null;
   if (team.activeBootcamp && (team.activeBootcamp.remainingMatchdays || 0) > 0) return null;
   const affordable = BOOTCAMP_TYPES.filter(function(type) {
-    return (team.finance.capital || 0) >= type.cost;
+    return (team.finance.capital || 0) >= type.cost && !hasTeamUsedBootcampThisSeason(team, type.id);
   });
   if (!affordable.length) return null;
   return affordable[randomInt(0, affordable.length - 1)];
@@ -1906,6 +1940,8 @@ window.Nexus.activateBootcamp = activateBootcamp;
 window.Nexus.selectRandomBootcamp = selectRandomBootcamp;
 window.Nexus.shouldAIActivateBootcamp = shouldAIActivateBootcamp;
 window.Nexus.tickBootcampDuration = tickBootcampDuration;
+window.Nexus.hasTeamUsedBootcampThisSeason = hasTeamUsedBootcampThisSeason;
+window.Nexus.resetBootcampUsageForSeason = resetBootcampUsageForSeason;
 window.Nexus.getCoachTier = getCoachTier;
 window.Nexus.getFacilityTier = getFacilityTier;
 window.Nexus.getPsychologyTier = getPsychologyTier;
@@ -3839,6 +3875,7 @@ function initUI() {
         (teams || []).forEach(team => {
           team.youthAcademy = team.youthAcademy || [];
           if (team.activeBootcamp === undefined) team.activeBootcamp = null;
+          if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') team.bootcampUsageThisSeason = {};
           (team.youthAcademy || []).forEach(function(p) {
             if (Nexus.ensureYouthProspectRoleBias) Nexus.ensureYouthProspectRoleBias(p);
           });
@@ -3948,6 +3985,7 @@ function initUI() {
         if (team.facilityTierLevel == null) team.facilityTierLevel = 1;
         if (team.psychologyLevel == null) team.psychologyLevel = 1;
         if (team.activeBootcamp === undefined) team.activeBootcamp = null;
+        if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') team.bootcampUsageThisSeason = {};
         if (Nexus.syncTeamEnvironmentFromTiers) Nexus.syncTeamEnvironmentFromTiers(team, environmentMap);
       });
     });
@@ -4007,6 +4045,7 @@ function initUI() {
         ? userTeamObj.activeTeamTraining : teamTrainingKeys[0];
       allTeamsForTraining.forEach(team => {
         if (team.activeBootcamp === undefined) team.activeBootcamp = null;
+        if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') team.bootcampUsageThisSeason = {};
         if (team === userTeamObj) return;
         team.activeTeamTraining = teamTrainingKeys[Math.floor(Math.random() * teamTrainingKeys.length)];
       });
@@ -4162,6 +4201,7 @@ function initUI() {
     if (Nexus.getRandomMetaPatch) Nexus.getRandomMetaPatch();
     meta = Nexus.getCurrentMeta ? Nexus.getCurrentMeta() : meta;
     const mapRotation = Nexus.rotateMapPool ? Nexus.rotateMapPool() : null;
+    if (Nexus.resetBootcampUsageForSeason) Nexus.resetBootcampUsageForSeason(allTeams);
     season = Nexus.createSeasonWithSplit(currentMainTeams);
     const currentChallengerTeams = allTeams.filter(t => t.tier === 'Challenger');
     challengerSeason = Nexus.createChallengerSeasonFromTeams && Nexus.createChallengerSeasonFromTeams(currentChallengerTeams);
@@ -4840,16 +4880,30 @@ function initUI() {
     if (activeOperationsPanel === 'bootcamp') {
       var bootcampTypes = window.Nexus.BOOTCAMP_TYPES || [];
       var activeBootcamp = (userTeam.activeBootcamp && (userTeam.activeBootcamp.remainingMatchdays || 0) > 0) ? userTeam.activeBootcamp : null;
+      if (!userTeam.bootcampUsageThisSeason || typeof userTeam.bootcampUsageThisSeason !== 'object') userTeam.bootcampUsageThisSeason = {};
+      var usageMap = userTeam.bootcampUsageThisSeason;
       var statusHtml = activeBootcamp
         ? '<div class="operations-bootcamp-status is-active"><strong>Active:</strong> ' + activeBootcamp.name + ' <span class="operations-tier-level">' + activeBootcamp.remainingMatchdays + ' matchday(s) left</span></div>'
-        : '<div class="operations-bootcamp-status"><strong>No active bootcamp.</strong> Activating one temporarily replaces team training effects.</div>';
+        : '<div class="operations-bootcamp-status"><strong>No active bootcamp.</strong> Each bootcamp type can be used once per season and temporarily replaces team training effects.</div>';
 
       bootcampEl.innerHTML = '<div class="operations-bootcamp">' + statusHtml + '<div class="operations-bootcamp-grid">' + bootcampTypes.map(function(b) {
         var hasFinance = !!(userTeam.finance);
         var canAfford = hasFinance && (userTeam.finance.capital || 0) >= (b.cost || 0);
-        var disabledByActive = !!activeBootcamp;
-        var disabled = disabledByActive || !canAfford;
-        var btnLabel = disabledByActive ? 'Bootcamp active' : (canAfford ? 'Activate' : 'Insufficient funds');
+        var alreadyUsed = !!usageMap[b.id];
+        var isCurrentActive = !!(activeBootcamp && activeBootcamp.id === b.id);
+        var disabled = true;
+        var btnLabel = 'Activate';
+        if (isCurrentActive) {
+          btnLabel = 'Active';
+        } else if (alreadyUsed) {
+          btnLabel = 'Locked (used this season)';
+        } else if (activeBootcamp) {
+          btnLabel = 'Bootcamp active';
+        } else if (!canAfford) {
+          btnLabel = 'Insufficient funds';
+        } else {
+          disabled = false;
+        }
         var activeClass = (activeBootcamp && activeBootcamp.id === b.id) ? ' is-active' : '';
         var durationText = (b.duration || 0) + ' matchday(s)';
         var costText = '$' + (b.cost || 0).toLocaleString();
