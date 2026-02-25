@@ -810,11 +810,25 @@ body {
   box-shadow: 0 22px 60px rgba(0,0,0,0.8);
 }
 
+.match-result__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
 .match-result__title {
-  margin: 0 0 1rem 0;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
   font-size: 1.25rem;
   font-weight: 600;
   color: #e5e7eb;
+}
+
+.match-result__continue {
+  flex-shrink: 0;
 }
 
 .match-result__score-row {
@@ -879,12 +893,6 @@ body {
   gap: 0.25rem;
   font-size: 0.85rem;
   color: #9ca3af;
-}
-
-.match-result__actions {
-  margin-top: 1rem;
-  display: flex;
-  justify-content: flex-end;
 }
 
 .match-result-page.match-result--playoffs .match-result__title {

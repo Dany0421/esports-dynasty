@@ -435,7 +435,10 @@
       <!-- Match result page (regular / playoffs / relegation) -->
       <div class="modal-overlay is-hidden match-result-overlay" id="matchResultPage" aria-hidden="true">
         <div class="modal match-result-page" id="matchResultPageContent">
-          <h2 class="match-result__title" id="matchResultTitle">Match Result</h2>
+          <div class="match-result__header">
+            <h2 class="match-result__title" id="matchResultTitle">Match Result</h2>
+            <button type="button" class="btn btn--primary match-result__continue" id="matchResultContinue">Continue</button>
+          </div>
           <div class="match-result__score-row">
             <span class="match-result__team" id="matchResultTeamA">—</span>
             <span class="match-result__score" id="matchResultScore">— – —</span>
@@ -454,9 +457,6 @@
               <h4>Opponent ratings</h4>
               <div id="matchResultChallengerStandings" class="match-result__standings-list"></div>
             </div>
-          </div>
-          <div class="match-result__actions">
-            <button type="button" class="btn btn--primary" id="matchResultContinue">Continue</button>
           </div>
         </div>
       </div>
