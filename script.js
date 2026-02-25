@@ -3815,6 +3815,7 @@ function initUI() {
       if (route === 'youth' && typeof updateYouthAcademyUI === 'function') updateYouthAcademyUI(userTeamRef());
       if (route === 'development' && typeof updateDevelopmentUI === 'function') updateDevelopmentUI();
       if (route === 'operations' && typeof updateOperationsUI === 'function') updateOperationsUI();
+      if (route === 'overview' && typeof updateFixtureUI === 'function') updateFixtureUI(season);
     });
   });
 
@@ -4920,6 +4921,7 @@ function initUI() {
             saveGameState();
             updateOperationsUI();
             if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
+            if (typeof updateFixtureUI === 'function') updateFixtureUI(season);
           } else {
             showNotification(result && result.message ? result.message : 'Could not activate bootcamp.', 'error');
           }
