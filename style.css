@@ -768,6 +768,16 @@ body {
 .career-past-champ { margin-top: 0.5rem; font-size: 0.85rem; color: #8a9ba8; }
 .career-past-card--clickable { cursor: pointer; }
 .career-past-card--clickable:hover { background: #162028; border-color: #2a3640; }
+.past-season-detail-modal {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.65rem;
+  padding: 1.1rem 1.2rem;
+  width: min(92vw, 640px);
+  max-height: 86vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
 .past-season-detail__section { font-size: 0.95rem; color: #8a9ba8; margin: 1rem 0 0.5rem; }
 .past-season-detail__text { font-size: 0.9rem; color: #c4cdd6; white-space: pre-line; margin: 0; }
 
@@ -1277,6 +1287,37 @@ body {
   #marketPlayerModal .modal__actions,
   #otherTeamRosterModal .modal__actions,
   #youthAcademyPlayerModal .player-detail-modal__actions {
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, #0f172a 30%);
+    padding-top: 0.65rem;
+  }
+
+  #pastSeasonDetailModal {
+    align-items: flex-end;
+    justify-content: stretch;
+    padding-top: 0.75rem;
+    background: rgba(2, 6, 23, 0.86);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #pastSeasonDetailModal > .past-season-detail-modal {
+    width: 100%;
+    max-width: none;
+    min-height: calc(100dvh - 0.75rem);
+    max-height: calc(100dvh - 0.75rem);
+    margin: 0;
+    border-radius: 1rem 1rem 0 0;
+    border: 1px solid #334155;
+    background: #0f172a;
+    padding: 1rem 1rem 1.2rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
+  }
+
+  #pastSeasonDetailModal .modal__actions {
     position: sticky;
     bottom: 0;
     background: linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, #0f172a 30%);
