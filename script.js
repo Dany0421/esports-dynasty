@@ -3990,7 +3990,10 @@ function initUI() {
             outcomeLoad = relLoad2 ? (relLoad2.winner === userTeamForEnd.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
           } else if (userTeamForEnd.tier === 'Challenger') {
             outcomeLoad = 'Challenger: ' + (positionLoad === 1 ? '1st' : positionLoad === 2 ? '2nd' : positionLoad === 3 ? '3rd' : (positionLoad + 'th'));
-          } else outcomeLoad = 'Championship Playoffs: Eliminated';
+          } else {
+            const qualifiedPlayoffsLoad = !useChallengerForPositionLoad && positionLoad != null && positionLoad <= 6;
+            outcomeLoad = qualifiedPlayoffsLoad ? 'Championship Playoffs: Eliminated' : 'Championship Playoffs: Did not qualify';
+          }
           var currentMainTeamsLoad = [...league, ...(challengerLeague || [])].filter(function(t) { return t.tier === 'Main'; });
           if (currentMainTeamsLoad.length === 12) {
             pendingSeasonEnd = { season: season, result: { finished: true }, position: positionLoad, rec: recLoad, outcome: outcomeLoad };
@@ -4636,7 +4639,10 @@ function initUI() {
       outcome = rel ? (rel.winner === userTeam.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
     } else if (userTeam.tier === 'Challenger') {
       outcome = 'Challenger: ' + (position === 1 ? '1st' : position === 2 ? '2nd' : position === 3 ? '3rd' : (position + 'th'));
-    } else outcome = 'Championship Playoffs: Eliminated';
+    } else {
+      const qualifiedPlayoffs = !useChallengerForPosition && position != null && position <= 6;
+      outcome = qualifiedPlayoffs ? 'Championship Playoffs: Eliminated' : 'Championship Playoffs: Did not qualify';
+    }
 
     const allTeams = [...league, ...(challengerLeague || [])];
     const currentMainTeams = allTeams.filter(t => t.tier === 'Main');
@@ -5370,6 +5376,7 @@ function initUI() {
     const standings = (isChallengerManager && challengerSeason && challengerSeason.standings) ? challengerSeason.standings : seasonData.standings;
     const phase = seasonData.phase || 'regular';
 
+    let positionValue = null;
     if (!standings || !standings[userTeam.name]) {
       posEl.textContent = '—';
       recEl.textContent = '0W - 0L';
@@ -5377,6 +5384,7 @@ function initUI() {
     } else {
       const sorted = Nexus.getSortedStandings(standings);
       const posIndex = sorted.findIndex(t => t.teamName === userTeam.name);
+      positionValue = posIndex === -1 ? null : posIndex + 1;
       const position = posIndex === -1 ? '—' : (posIndex + 1) + (posIndex === 0 ? 'st' : posIndex === 1 ? 'nd' : posIndex === 2 ? 'rd' : 'th');
       posEl.textContent = position;
       const s = standings[userTeam.name];
@@ -5405,7 +5413,8 @@ function initUI() {
         const rel = (seasonData.relegationResults || []).find(r => r.challengerTeam === userTeam.name);
         outcome = rel ? (rel.winner === userTeam.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
       } else {
-        outcome = 'Championship Playoffs: Eliminated';
+        const qualifiedPlayoffs = !isChallengerManager && positionValue != null && positionValue <= 6;
+        outcome = qualifiedPlayoffs ? 'Championship Playoffs: Eliminated' : 'Championship Playoffs: Did not qualify';
       }
     } else if (phase === 'relegation') {
       const inMain = seasonData.relegationCandidates && seasonData.relegationCandidates.some(t => t.name === userTeam.name);
