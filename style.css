@@ -1086,12 +1086,24 @@ body {
   color: #f97316;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .match-result-overlay {
-    padding: 1.5rem;
+    align-items: flex-end;
+    padding: 0.75rem 0.5rem 0;
+    background: rgba(2, 6, 23, 0.88);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   .match-result-page {
-    padding: 1.25rem 1.1rem 1rem;
+    width: 100%;
+    max-width: none;
+    min-height: calc(100dvh - 0.75rem);
+    max-height: calc(100dvh - 0.75rem);
+    border-radius: 1rem 1rem 0 0;
+    padding: 1rem 1rem 1.2rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
   }
   .match-result__standings-row {
     flex-direction: column;
@@ -1179,12 +1191,24 @@ body {
   justify-content: flex-end;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .season-stats-overlay {
-    padding: 1.5rem;
+    align-items: flex-end;
+    padding: 0.75rem 0.5rem 0;
+    background: rgba(2, 6, 23, 0.88);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   .season-stats-page {
-    padding: 1.25rem 1.1rem 1rem;
+    width: 100%;
+    max-width: none;
+    min-height: calc(100dvh - 0.75rem);
+    max-height: calc(100dvh - 0.75rem);
+    border-radius: 1rem 1rem 0 0;
+    padding: 1rem 1rem 1.2rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
   }
   .season-stats__body {
     flex-direction: column;

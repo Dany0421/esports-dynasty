@@ -2338,8 +2338,16 @@ function playNextMatchday(season, environmentMap, meta) {
       window.Nexus.fillEmptyRosterSlotsForMatch(match.teamB);
     }
     if (window.Nexus.shouldAIActivateBootcamp) {
-      window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
-      window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+      const involvesUser = userTeam && (
+        match.teamA === userTeam ||
+        match.teamB === userTeam ||
+        (match.teamA && match.teamA.name === userTeam.name) ||
+        (match.teamB && match.teamB.name === userTeam.name)
+      );
+      if (!involvesUser) {
+        window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
+        window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+      }
     }
     const result = simulateMatch({
       teamA: match.teamA,
@@ -2493,13 +2501,22 @@ function createPlayoffBracket(topTeams) {
 
 function playPlayoffRound(season, environmentMap, meta) {
   const bracket = season.playoffsBracket;
+  const userTeam = (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
   const winners = [];
   const roundResults = [];
 
   bracket.matches.forEach(match => {
     if (window.Nexus.shouldAIActivateBootcamp) {
-      window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
-      window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+      const involvesUser = userTeam && (
+        match.teamA === userTeam ||
+        match.teamB === userTeam ||
+        (match.teamA && match.teamA.name === userTeam.name) ||
+        (match.teamB && match.teamB.name === userTeam.name)
+      );
+      if (!involvesUser) {
+        window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
+        window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+      }
     }
     const result = simulateMatch({
       teamA: match.teamA,
@@ -2556,6 +2573,7 @@ function resolveRelegationTournament({
   environmentMap,
   meta
 }) {
+  const userTeam = (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
   const results = [];
   const matchResults = [];
   const safeMain = Array.isArray(mainTeams) ? mainTeams : [];
@@ -2567,8 +2585,16 @@ function resolveRelegationTournament({
     if (!main || !challenger || !main.name || !challenger.name) continue;
 
     if (window.Nexus.shouldAIActivateBootcamp) {
-      window.Nexus.shouldAIActivateBootcamp(main, challenger);
-      window.Nexus.shouldAIActivateBootcamp(challenger, main);
+      const involvesUser = userTeam && (
+        main === userTeam ||
+        challenger === userTeam ||
+        main.name === userTeam.name ||
+        challenger.name === userTeam.name
+      );
+      if (!involvesUser) {
+        window.Nexus.shouldAIActivateBootcamp(main, challenger);
+        window.Nexus.shouldAIActivateBootcamp(challenger, main);
+      }
     }
     const matchResult = simulateMatch({
       teamA: main,
@@ -5010,6 +5036,59 @@ function initUI() {
     ].filter(Boolean).join(' ');
   }
 
+  function primeAIBootcampForUpcomingUserFixture(seasonData) {
+    if (!seasonData || !window.Nexus || !window.Nexus.shouldAIActivateBootcamp) return;
+    const userTeam = userTeamRef();
+    if (!userTeam || !userTeam.name) return;
+
+    const phase = seasonData.phase || 'regular';
+    if (phase === 'finished') return;
+
+    let targetSeason = seasonData;
+    let opponent = null;
+    let token = null;
+
+    if (phase === 'playoffs' && seasonData.playoffsBracket && Array.isArray(seasonData.playoffsBracket.matches)) {
+      const round = seasonData.playoffsBracket.round || 0;
+      const ourMatch = seasonData.playoffsBracket.matches.find(function(m) {
+        return m && m.teamA && m.teamB && (m.teamA.name === userTeam.name || m.teamB.name === userTeam.name);
+      });
+      if (!ourMatch) return;
+      opponent = ourMatch.teamA.name === userTeam.name ? ourMatch.teamB : ourMatch.teamA;
+      token = 'playoffs:' + round + ':' + userTeam.name;
+    } else if (phase === 'relegation' && seasonData.relegationCandidates && seasonData.challengerPromotion) {
+      const main = seasonData.relegationCandidates || [];
+      const challenger = seasonData.challengerPromotion || [];
+      for (let i = 0; i < Math.max(main.length, challenger.length); i++) {
+        const a = main[i];
+        const b = challenger[i];
+        if (!a || !b) continue;
+        if (a.name === userTeam.name) { opponent = b; break; }
+        if (b.name === userTeam.name) { opponent = a; break; }
+      }
+      if (!opponent) return;
+      token = 'relegation:' + (seasonData.currentMatchday || 0) + ':' + userTeam.name;
+    } else {
+      const isChallengerManager = userTeam.tier === 'Challenger';
+      if (isChallengerManager && challengerSeason && challengerSeason.teams && challengerSeason.teams.some(function(t) { return t.name === userTeam.name; })) {
+        targetSeason = challengerSeason;
+      }
+      const md = targetSeason.currentMatchday || 0;
+      const matches = (targetSeason.matchdays || [])[md] || [];
+      const ourMatch = matches.find(function(m) {
+        return m && m.teamA && m.teamB && (m.teamA.name === userTeam.name || m.teamB.name === userTeam.name);
+      });
+      if (!ourMatch) return;
+      opponent = ourMatch.teamA.name === userTeam.name ? ourMatch.teamB : ourMatch.teamA;
+      token = 'regular:' + md + ':' + userTeam.name;
+    }
+
+    if (!opponent || !opponent.name) return;
+    if (targetSeason._aiBootcampPreviewToken === token) return;
+    targetSeason._aiBootcampPreviewToken = token;
+    window.Nexus.shouldAIActivateBootcamp(opponent, userTeam);
+  }
+
   // ===== FIXTURE UI (next match / stage) =====
   function updateFixtureUI(seasonData) {
     updateOverviewAgeUI();
@@ -5026,6 +5105,7 @@ function initUI() {
     if (metaDescEl) metaDescEl.textContent = currentMeta && currentMeta.description ? currentMeta.description : (currentMeta ? 'Tempo: ' + currentMeta.tempo + ' | Aggression: ' + (currentMeta.aggressionLevel != null ? currentMeta.aggressionLevel : '—') : '');
 
     const userTeam = league[0];
+    if (userTeam) primeAIBootcampForUpcomingUserFixture(seasonData);
     const teamPlanKeys = window.Nexus.TEAM_TRAINING_PLAN_KEYS || [];
     if (userTeam && teamPlanKeys.length && (userTeam.activeTeamTraining == null || userTeam.activeTeamTraining === '' || !teamPlanKeys.includes(userTeam.activeTeamTraining))) {
       userTeam.activeTeamTraining = teamPlanKeys[0];
