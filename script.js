@@ -2403,6 +2403,26 @@ function getSortedStandings(standings) {
     .sort((a, b) => b.points - a.points || b.wins - a.wins);
 }
 
+function getMainPlayoffOutcome(seasonData, teamName, regularPosition, usingChallengerStandings) {
+  if (!teamName || usingChallengerStandings) return 'Championship Playoffs: Did not qualify';
+  const qualified = regularPosition != null && regularPosition <= 6;
+  if (!qualified) return 'Championship Playoffs: Did not qualify';
+
+  const finalists = (seasonData && seasonData.playoffsBracket && Array.isArray(seasonData.playoffsBracket.finalists))
+    ? seasonData.playoffsBracket.finalists
+      .map(function(t) { return typeof t === 'string' ? t : (t && t.name); })
+      .filter(Boolean)
+    : [];
+
+  if (finalists.length >= 2) {
+    return finalists.indexOf(teamName) >= 0
+      ? 'Championship Playoffs: Eliminated in final'
+      : 'Championship Playoffs: Eliminated in semi finals';
+  }
+
+  return 'Championship Playoffs: Eliminated';
+}
+
 // Expose Step 7
 window.Nexus = window.Nexus || {};
 window.Nexus.createSeason = createSeason;
@@ -3989,10 +4009,9 @@ function initUI() {
             var relLoad2 = (season.relegationResults || []).find(function(r) { return r.challengerTeam === userTeamForEnd.name; });
             outcomeLoad = relLoad2 ? (relLoad2.winner === userTeamForEnd.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
           } else if (userTeamForEnd.tier === 'Challenger') {
-            outcomeLoad = 'Challenger: ' + (positionLoad === 1 ? '1st' : positionLoad === 2 ? '2nd' : positionLoad === 3 ? '3rd' : (positionLoad + 'th'));
+            outcomeLoad = 'Challenger Championship: Did not qualify';
           } else {
-            const qualifiedPlayoffsLoad = !useChallengerForPositionLoad && positionLoad != null && positionLoad <= 6;
-            outcomeLoad = qualifiedPlayoffsLoad ? 'Championship Playoffs: Eliminated' : 'Championship Playoffs: Did not qualify';
+            outcomeLoad = getMainPlayoffOutcome(season, userTeamForEnd.name, positionLoad, useChallengerForPositionLoad);
           }
           var currentMainTeamsLoad = [...league, ...(challengerLeague || [])].filter(function(t) { return t.tier === 'Main'; });
           if (currentMainTeamsLoad.length === 12) {
@@ -4638,10 +4657,9 @@ function initUI() {
       const rel = (season.relegationResults || []).find(r => r.challengerTeam === userTeam.name);
       outcome = rel ? (rel.winner === userTeam.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
     } else if (userTeam.tier === 'Challenger') {
-      outcome = 'Challenger: ' + (position === 1 ? '1st' : position === 2 ? '2nd' : position === 3 ? '3rd' : (position + 'th'));
+      outcome = 'Challenger Championship: Did not qualify';
     } else {
-      const qualifiedPlayoffs = !useChallengerForPosition && position != null && position <= 6;
-      outcome = qualifiedPlayoffs ? 'Championship Playoffs: Eliminated' : 'Championship Playoffs: Did not qualify';
+      outcome = getMainPlayoffOutcome(season, userTeam.name, position, useChallengerForPosition);
     }
 
     const allTeams = [...league, ...(challengerLeague || [])];
@@ -5412,9 +5430,10 @@ function initUI() {
       } else if (seasonData.challengerPromotion && seasonData.challengerPromotion.some(t => t.name === userTeam.name)) {
         const rel = (seasonData.relegationResults || []).find(r => r.challengerTeam === userTeam.name);
         outcome = rel ? (rel.winner === userTeam.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
+      } else if (isChallengerManager) {
+        outcome = 'Challenger Championship: Did not qualify';
       } else {
-        const qualifiedPlayoffs = !isChallengerManager && positionValue != null && positionValue <= 6;
-        outcome = qualifiedPlayoffs ? 'Championship Playoffs: Eliminated' : 'Championship Playoffs: Did not qualify';
+        outcome = getMainPlayoffOutcome(seasonData, userTeam.name, positionValue, false);
       }
     } else if (phase === 'relegation') {
       const inMain = seasonData.relegationCandidates && seasonData.relegationCandidates.some(t => t.name === userTeam.name);
