@@ -128,7 +128,10 @@ const usedPlayerNames = new Set();
 
 function getAvailableGamingName() {
   const available = GAMING_NAMES.filter(n => !usedPlayerNames.has(n));
-  const name = available.length > 0 ? pickRandom(available) : ('Player' + playerIdCounter);
+  // When unique tags are exhausted, keep using the same gaming-name pool
+  // instead of falling back to generic "Player123" labels.
+  const fallbackPool = GAMING_NAMES.length > 0 ? GAMING_NAMES : ['Player'];
+  const name = available.length > 0 ? pickRandom(available) : pickRandom(fallbackPool);
   usedPlayerNames.add(name);
   return name;
 }
