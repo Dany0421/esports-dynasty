@@ -1605,3 +1605,116 @@ body {
   line-height: 1.5;
   color: #e2e6ea;
 }
+
+/* Match decision modal */
+.match-decision-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.match-decision-modal .modal__overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.8);
+}
+
+.match-decision-modal .modal__box {
+  position: relative;
+  max-width: 480px;
+  width: min(90vw, 480px);
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.65);
+}
+
+.match-decision-box {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.match-decision-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.match-decision-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.match-decision-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.match-decision-subtitle {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+.match-decision-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.match-decision-option {
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+  background: #0f172a;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: left;
+  width: 100%;
+  color: inherit;
+}
+
+.match-decision-option:hover {
+  border-color: #3b82f6;
+  background: #15233a;
+}
+
+.match-decision-option__label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+}
+
+.match-decision-option__desc {
+  font-size: 0.82rem;
+  color: #94a3b8;
+}
+
+.match-decision-option:disabled,
+.match-decision-option.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  border-color: #2b3440;
+}
+
+@media (max-width: 768px) {
+  .match-decision-modal {
+    align-items: flex-end;
+    padding: 0.5rem;
+  }
+  .match-decision-modal .modal__box {
+    width: 100%;
+    max-width: none;
+    border-radius: 1rem 1rem 0 0;
+    max-height: calc(100dvh - 0.5rem);
+    overflow-y: auto;
+  }
+}

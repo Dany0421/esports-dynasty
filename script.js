@@ -1561,6 +1561,343 @@ const SPONSOR_TIERS = [
   { id: 'global-bank', name: 'Global Banking Group', tier: 'Hard', totalPay: 700000, rules: [{ type: 'minWins', value: 9, description: 'Win at least 9 matches' }, { type: 'minPlacement', value: 3, description: 'Finish in top 3' }, { type: 'useYouth', value: 1, description: 'Promote 1 youth player during season' }], description: 'Premium sponsorship for elite organizations only' }
 ];
 
+// Match Decision Event system (pre-match choices that affect one simulation stage)
+const MATCH_DECISION_EVENTS = {
+  tactical_approach: {
+    id: 'tactical_approach',
+    title: 'Pre-Match Tactical Call',
+    icon: '📋',
+    description: function(ctx) {
+      return 'You have to decide your team\'s approach going into the match against ' + ctx.opponentName + '.';
+    },
+    condition: function() { return true; },
+    options: [
+      {
+        label: 'Aggressive',
+        description: 'Full pressure, take risks. +12% match power, but +8% injury risk per player.',
+        effect: { userPowerMult: 1.12, injuryRiskBonus: 0.08 }
+      },
+      {
+        label: 'Balanced',
+        description: 'Default game plan. No modifier.',
+        effect: {}
+      },
+      {
+        label: 'Conservative',
+        description: 'Protect structure, frustrate the opponent. -6% your power, -10% opponent power.',
+        effect: { userPowerMult: 0.94, opponentPowerMult: 0.90 }
+      }
+    ]
+  },
+  comms_breakdown: {
+    id: 'comms_breakdown',
+    title: 'Comms Under Pressure',
+    icon: '🎧',
+    description: function(ctx) {
+      return ctx.stressedPlayer.firstName + ' is mentally struggling and your in-game comms are suffering. How do you handle it?';
+    },
+    condition: function(ctx) {
+      return ctx.stressedPlayer != null;
+    },
+    options: [
+      {
+        label: 'Let him lead through it',
+        description: 'Trust the process. No power change, but he takes a morale hit (-6).',
+        effect: { stressedPlayerMoraleDelta: -6 }
+      },
+      {
+        label: 'Rotate the calls to another player',
+        description: 'Disrupts rhythm slightly (-6% power) but protects team morale.',
+        effect: { userPowerMult: 0.94, stressedPlayerMoraleDelta: 5 }
+      },
+      {
+        label: 'Bench him this match',
+        description: 'Bench player steps in. Bigger power hit (-12%) but stressed player rests.',
+        effect: { userPowerMult: 0.88, stressedPlayerMoraleDelta: 8 }
+      }
+    ]
+  },
+  map_exploit: {
+    id: 'map_exploit',
+    title: 'Map Pool Weakness Spotted',
+    icon: '🗺️',
+    description: function(ctx) {
+      return 'Your analyst has found a vulnerability in ' + ctx.opponentName + '\'s map pool. Do you adapt your prep?';
+    },
+    condition: function() { return true; },
+    options: [
+      {
+        label: 'Full exploitation',
+        description: 'Rebuild the gameplan around it. +15% power if it works. High risk - if you lose, team morale drops.',
+        effect: { userPowerMult: 1.15, onLossMoraleAllDelta: -4 }
+      },
+      {
+        label: 'Partial adaptation',
+        description: 'Mix your normal prep with the exploit. +6% power, safe.',
+        effect: { userPowerMult: 1.06 }
+      },
+      {
+        label: 'Standard preparation',
+        description: 'Stick to your gameplan. No modifier.',
+        effect: {}
+      }
+    ]
+  },
+  player_condition: {
+    id: 'player_condition',
+    title: 'Player Fitness Concern',
+    icon: '⚕️',
+    description: function(ctx) {
+      return ctx.concernedPlayer.firstName + ' is not at 100%. Do you take the risk of playing him?';
+    },
+    condition: function(ctx) {
+      return ctx.concernedPlayer != null;
+    },
+    options: [
+      {
+        label: 'Play him at full intensity',
+        description: 'Normal contribution, but +14% injury risk for him this match.',
+        effect: { concernedPlayerInjuryRiskBonus: 0.14 }
+      },
+      {
+        label: 'Manage his minutes carefully',
+        description: 'His contribution is reduced (-15% power from his slot), but injury risk is normal.',
+        effect: { userPowerMult: 0.93 }
+      },
+      {
+        label: 'Rest him, trust the bench',
+        description: 'Bench player plays instead. -10% overall team power, no extra injury risk.',
+        effect: { userPowerMult: 0.90 }
+      }
+    ]
+  },
+  opponent_intel: {
+    id: 'opponent_intel',
+    title: 'Opponent Intel Available',
+    icon: '🔍',
+    description: function(ctx) {
+      return 'Your staff has compiled a full breakdown of ' + ctx.opponentName + '\'s recent matches. Do you invest in deep analysis?';
+    },
+    condition: function() { return true; },
+    options: [
+      {
+        label: 'Full analysis ($5,000)',
+        description: 'Thorough prep. +10% match power. Costs $5,000.',
+        effect: { userPowerMult: 1.10, financeCost: 5000 }
+      },
+      {
+        label: 'Quick review ($2,000)',
+        description: 'Light prep. +5% match power. Costs $2,000.',
+        effect: { userPowerMult: 1.05, financeCost: 2000 }
+      },
+      {
+        label: 'Trust your preparation',
+        description: 'No cost, no modifier.',
+        effect: {}
+      }
+    ]
+  }
+};
+
+function ensureSeasonDecisionData(season) {
+  if (!season || typeof season !== 'object') return { resolvedFixtures: {}, pending: null };
+  if (!season.matchDecisionState || typeof season.matchDecisionState !== 'object') {
+    season.matchDecisionState = { resolvedFixtures: {}, pending: null };
+  }
+  if (!season.matchDecisionState.resolvedFixtures || typeof season.matchDecisionState.resolvedFixtures !== 'object') {
+    season.matchDecisionState.resolvedFixtures = {};
+  }
+  if (!('pending' in season.matchDecisionState)) {
+    season.matchDecisionState.pending = null;
+  }
+  return season.matchDecisionState;
+}
+
+function markMatchDecisionResolved(season, fixtureKey, eventId) {
+  const data = ensureSeasonDecisionData(season);
+  if (fixtureKey) data.resolvedFixtures[fixtureKey] = eventId || true;
+  if (data.pending && (!fixtureKey || data.pending.fixtureKey === fixtureKey)) data.pending = null;
+}
+
+function getMatchDecisionFixture(season, userTeam) {
+  if (!season || !userTeam || !userTeam.name) return null;
+  const phase = season.phase || 'regular';
+  const userName = userTeam.name;
+  const includesUser = function(match) {
+    return !!(match && match.teamA && match.teamB && (match.teamA.name === userName || match.teamB.name === userName));
+  };
+  const opponentOf = function(match) {
+    if (!match || !match.teamA || !match.teamB) return 'your opponent';
+    return match.teamA.name === userName ? match.teamB.name : match.teamA.name;
+  };
+
+  if (phase === 'regular') {
+    const days = season.matchdays || season.schedule || [];
+    const md = season.currentMatchday || 0;
+    const dayMatches = days[md] || [];
+    const userMatch = dayMatches.find(includesUser);
+    if (!userMatch) return null;
+    return {
+      phase: 'regular',
+      match: userMatch,
+      opponentName: opponentOf(userMatch),
+      fixtureKey: 'regular:' + md + ':' + userMatch.teamA.name + ':' + userMatch.teamB.name
+    };
+  }
+
+  if (phase === 'playoffs') {
+    const bracket = season.playoffsBracket;
+    const matches = (bracket && bracket.matches) || [];
+    const idx = matches.findIndex(includesUser);
+    if (idx === -1) return null;
+    const userMatch = matches[idx];
+    const round = (bracket && bracket.round != null) ? bracket.round : 0;
+    return {
+      phase: 'playoffs',
+      match: userMatch,
+      opponentName: opponentOf(userMatch),
+      fixtureKey: 'playoffs:' + round + ':' + idx + ':' + userMatch.teamA.name + ':' + userMatch.teamB.name
+    };
+  }
+
+  if (phase === 'relegation') {
+    const main = season.relegationCandidates || [];
+    const challenger = season.challengerPromotion || [];
+    for (let i = 0; i < 2; i++) {
+      const teamA = main[i];
+      const teamB = challenger[i];
+      const m = teamA && teamB ? { teamA: teamA, teamB: teamB } : null;
+      if (!m || !includesUser(m)) continue;
+      return {
+        phase: 'relegation',
+        match: m,
+        opponentName: opponentOf(m),
+        fixtureKey: 'relegation:' + i + ':' + teamA.name + ':' + teamB.name
+      };
+    }
+    return null;
+  }
+
+  if (phase === 'invitational') {
+    const bracketMatches = (season.invitationalBracket && season.invitationalBracket.matches) || [];
+    const directMatches = season.invitationalMatches || [];
+    const matches = (Array.isArray(directMatches) && directMatches.length) ? directMatches : bracketMatches;
+    const idx = matches.findIndex(includesUser);
+    if (idx === -1) return null;
+    const userMatch = matches[idx];
+    const round = season.invitationalRound != null
+      ? season.invitationalRound
+      : ((season.invitationalBracket && season.invitationalBracket.round != null)
+        ? season.invitationalBracket.round
+        : (season.currentMatchday || 0));
+    return {
+      phase: 'invitational',
+      match: userMatch,
+      opponentName: opponentOf(userMatch),
+      fixtureKey: 'invitational:' + round + ':' + idx + ':' + userMatch.teamA.name + ':' + userMatch.teamB.name
+    };
+  }
+
+  return null;
+}
+
+function getMatchDecisionContext(season, userTeam) {
+  const fixture = getMatchDecisionFixture(season, userTeam);
+  const opponentName = fixture ? fixture.opponentName : 'your opponent';
+  const starters = (userTeam && (userTeam.starterSlots || userTeam.starters || [])) || [];
+  const safeStarters = starters.filter(Boolean);
+  const stressed = safeStarters
+    .filter(function(p) { return (p.morale != null ? p.morale : 70) < 50; })
+    .sort(function(a, b) { return (a.morale != null ? a.morale : 70) - (b.morale != null ? b.morale : 70); })[0] || null;
+  const concerned = safeStarters
+    .filter(function(p) {
+      return (p.morale != null ? p.morale : 70) < 40 || (p.injury && p.injury.matchdaysLeft === 0);
+    })[0] || null;
+
+  return {
+    opponentName: opponentName,
+    stressedPlayer: stressed,
+    concernedPlayer: concerned,
+    fixtureKey: fixture ? fixture.fixtureKey : null
+  };
+}
+
+function pickMatchDecisionEvent(season, userTeam) {
+  const fixture = getMatchDecisionFixture(season, userTeam);
+  if (!fixture) return null;
+
+  const decisionData = ensureSeasonDecisionData(season);
+  if (decisionData.resolvedFixtures[fixture.fixtureKey]) return null;
+
+  if (decisionData.pending && decisionData.pending.fixtureKey === fixture.fixtureKey && decisionData.pending.eventId) {
+    const pendingEvent = MATCH_DECISION_EVENTS[decisionData.pending.eventId];
+    if (pendingEvent) {
+      return { event: pendingEvent, ctx: getMatchDecisionContext(season, userTeam), fixtureKey: fixture.fixtureKey };
+    }
+  }
+
+  const isHighStakes = fixture.phase === 'playoffs' || fixture.phase === 'invitational' || fixture.phase === 'relegation';
+  const triggerChance = isHighStakes ? 0.60 : 0.40;
+  if (Math.random() > triggerChance) {
+    decisionData.pending = null;
+    return null;
+  }
+
+  const ctx = getMatchDecisionContext(season, userTeam);
+  const allKeys = Object.keys(MATCH_DECISION_EVENTS);
+  const shuffled = allKeys.slice().sort(function() { return Math.random() - 0.5; });
+  for (let i = 0; i < shuffled.length; i++) {
+    const ev = MATCH_DECISION_EVENTS[shuffled[i]];
+    if (ev && typeof ev.condition === 'function' && ev.condition(ctx)) {
+      decisionData.pending = { fixtureKey: fixture.fixtureKey, eventId: ev.id };
+      return { event: ev, ctx: ctx, fixtureKey: fixture.fixtureKey };
+    }
+  }
+  decisionData.pending = null;
+  return null;
+}
+
+function applyMatchDecisionEffect(season, userTeam, effect) {
+  const safeEffect = effect || {};
+  const decisionData = ensureSeasonDecisionData(season);
+  const pending = decisionData.pending;
+  const ctx = getMatchDecisionContext(season, userTeam);
+  const fixtureKey = (pending && pending.fixtureKey) || ctx.fixtureKey;
+
+  var canApplyFinanceEffects = true;
+  if (safeEffect.financeCost && userTeam && userTeam.finance) {
+    const cost = safeEffect.financeCost;
+    if ((userTeam.finance.capital || 0) >= cost) {
+      userTeam.finance.capital -= cost;
+      userTeam.finance.expensesThisSeason = (userTeam.finance.expensesThisSeason || 0) + cost;
+    } else {
+      canApplyFinanceEffects = false;
+      if (typeof showNotification === 'function') {
+        showNotification('Not enough capital for this decision option. Boost not applied.', 'error');
+      }
+    }
+  } else if (safeEffect.financeCost) {
+    canApplyFinanceEffects = false;
+  }
+
+  window.Nexus._pendingMatchModifier = {
+    userPowerMult: canApplyFinanceEffects ? (safeEffect.userPowerMult || 1) : 1,
+    opponentPowerMult: canApplyFinanceEffects ? (safeEffect.opponentPowerMult || 1) : 1,
+    injuryRiskBonus: safeEffect.injuryRiskBonus || 0,
+    concernedPlayerInjuryRiskBonus: safeEffect.concernedPlayerInjuryRiskBonus || 0,
+    concernedPlayerId: ctx && ctx.concernedPlayer ? ctx.concernedPlayer.id : null,
+    onLossMoraleAllDelta: safeEffect.onLossMoraleAllDelta || 0,
+    fixtureKey: fixtureKey || null
+  };
+
+  if (safeEffect.stressedPlayerMoraleDelta && ctx && ctx.stressedPlayer) {
+    const stressed = ctx.stressedPlayer;
+    stressed.morale = clamp((stressed.morale != null ? stressed.morale : 70) + safeEffect.stressedPlayerMoraleDelta, 0, 100);
+  }
+
+  markMatchDecisionResolved(season, fixtureKey, pending && pending.eventId ? pending.eventId : null);
+}
+
 window.Nexus.COACH_TIERS = COACH_TIERS;
 window.Nexus.FACILITY_TIERS = FACILITY_TIERS;
 window.Nexus.PSYCHOLOGY_TIERS = PSYCHOLOGY_TIERS;
@@ -1794,8 +2131,30 @@ function generateMatchScore(winnerName, teamA, teamB) {
 function simulateMatch({ teamA, teamB, environmentA, environmentB, meta }) {
   const powerAData = calculateTeamMatchPower({ team: teamA, environment: environmentA, meta });
   const powerBData = calculateTeamMatchPower({ team: teamB, environment: environmentB, meta });
+  let powerA = powerAData.finalPower;
+  let powerB = powerBData.finalPower;
 
-  const probA = calculateWinProbability(powerAData.finalPower, powerBData.finalPower);
+  // Apply one-match pending decision modifier to the user fixture only.
+  const _decisionMod = window.Nexus && window.Nexus._pendingMatchModifier;
+  const _userTeamRef =
+    (window.Nexus && window.Nexus.getUserTeam && window.Nexus.getUserTeam()) ||
+    (window.Nexus && window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) ||
+    null;
+  const _isUserMatch = _userTeamRef && (
+    (teamA && teamA.name === _userTeamRef.name) ||
+    (teamB && teamB.name === _userTeamRef.name)
+  );
+  if (_decisionMod && _userTeamRef && _isUserMatch) {
+    if (teamA && teamA.name === _userTeamRef.name) {
+      powerA = (powerA || 0) * (_decisionMod.userPowerMult || 1);
+      powerB = (powerB || 0) * (_decisionMod.opponentPowerMult || 1);
+    } else if (teamB && teamB.name === _userTeamRef.name) {
+      powerB = (powerB || 0) * (_decisionMod.userPowerMult || 1);
+      powerA = (powerA || 0) * (_decisionMod.opponentPowerMult || 1);
+    }
+  }
+
+  const probA = calculateWinProbability(powerA, powerB);
 
   const roll = Math.random();
 
@@ -1810,18 +2169,63 @@ function simulateMatch({ teamA, teamB, environmentA, environmentB, meta }) {
     playerPerformances[teamB.name] = powerBData.playerPowers.slice();
   }
 
-  return {
+  const result = {
     winner,
     scoreA,
     scoreB,
     playerPerformances,
     stage: undefined,
     probabilityA: Math.round(probA * 100) + '%',
-    teamAPower: powerAData.finalPower.toFixed(2),
-    teamBPower: powerBData.finalPower.toFixed(2),
+    teamAPower: powerA.toFixed(2),
+    teamBPower: powerB.toFixed(2),
     teamASynergy: powerAData.synergy,
     teamBSynergy: powerBData.synergy
   };
+
+  if (_decisionMod && _userTeamRef && _isUserMatch) {
+    // Apply morale penalty only when the user team loses and the selected event has that downside.
+    if (_decisionMod.onLossMoraleAllDelta) {
+      const userLost = result.winner && result.winner !== _userTeamRef.name;
+      if (userLost) {
+        (_userTeamRef.players || []).forEach(function(p) {
+          p.morale = clamp((p.morale != null ? p.morale : 70) + _decisionMod.onLossMoraleAllDelta, 0, 100);
+        });
+      }
+    }
+
+    // Lightweight injury-risk implementation: can cause morale drops (minor knocks).
+    const injuryEvents = [];
+    const applyDecisionInjuryRisk = function(team) {
+      if (!team || team.name !== _userTeamRef.name) return;
+      const starters = (team.starterSlots && team.starterSlots.length ? team.starterSlots : (team.starters || team.players || []))
+        .filter(Boolean)
+        .slice(0, 5);
+      starters.forEach(function(player) {
+        var injuryChance = 0;
+        if (_decisionMod.injuryRiskBonus) injuryChance += _decisionMod.injuryRiskBonus;
+        if (_decisionMod.concernedPlayerInjuryRiskBonus && _decisionMod.concernedPlayerId && player.id === _decisionMod.concernedPlayerId) {
+          injuryChance += _decisionMod.concernedPlayerInjuryRiskBonus;
+        }
+        injuryChance = clamp(injuryChance, 0, 0.95);
+        if (injuryChance > 0 && Math.random() < injuryChance) {
+          var moraleDrop = randomInt(4, 10);
+          player.morale = clamp((player.morale != null ? player.morale : 70) - moraleDrop, 0, 100);
+          injuryEvents.push({
+            team: team.name,
+            player: getPlayerDisplayName(player),
+            moraleDrop: moraleDrop
+          });
+        }
+      });
+    };
+    applyDecisionInjuryRisk(teamA);
+    applyDecisionInjuryRisk(teamB);
+    if (injuryEvents.length > 0) result.injuryEvents = injuryEvents;
+
+    window.Nexus._pendingMatchModifier = null;
+  }
+
+  return result;
 }
 
 var MVP_ROLE_WEIGHTS = { Duelist: 0.40, Controller: 0.30, Sentinel: 0.20, Initiator: 0.10 };
@@ -1973,7 +2377,8 @@ function createSeason(teams) {
     standings,
     matchdays: generateMatchdays(teams),
     currentMatchday: 0,
-    playedMatchResults: []
+    playedMatchResults: [],
+    matchDecisionState: { resolvedFixtures: {}, pending: null }
   };
 }
 
@@ -3347,7 +3752,8 @@ function buildSeasonSnapshot(season) {
     matchdaysUntilMetaShift: season.matchdaysUntilMetaShift,
     metaHistory: season.metaHistory || [],
     activeMapPool: season.activeMapPool || null,
-    lastAiMarketBuyerTeamName: season.lastAiMarketBuyerTeamName || null
+    lastAiMarketBuyerTeamName: season.lastAiMarketBuyerTeamName || null,
+    matchDecisionState: season.matchDecisionState || { resolvedFixtures: {}, pending: null }
   };
   if (season.playoffsBracket) {
     snap.playoffsBracket = {
@@ -3414,7 +3820,13 @@ function restoreSeasonFromSnapshot(snap, mainTeams, challengerLeague) {
     matchdaysUntilMetaShift: snap.matchdaysUntilMetaShift != null ? snap.matchdaysUntilMetaShift : 4,
     metaHistory: Array.isArray(snap.metaHistory) ? snap.metaHistory : [],
     activeMapPool,
-    lastAiMarketBuyerTeamName: snap.lastAiMarketBuyerTeamName || null
+    lastAiMarketBuyerTeamName: snap.lastAiMarketBuyerTeamName || null,
+    matchDecisionState: {
+      resolvedFixtures: (snap.matchDecisionState && typeof snap.matchDecisionState.resolvedFixtures === 'object')
+        ? snap.matchDecisionState.resolvedFixtures
+        : {},
+      pending: (snap.matchDecisionState && snap.matchDecisionState.pending) ? snap.matchDecisionState.pending : null
+    }
   };
   return season;
 }
@@ -3445,7 +3857,13 @@ function restoreChallengerSeasonFromSnapshot(snap, challengerTeams) {
     matchdays,
     currentMatchday: snap.currentMatchday || 0,
     playedMatchResults,
-    phase: 'regular'
+    phase: 'regular',
+    matchDecisionState: {
+      resolvedFixtures: (snap.matchDecisionState && typeof snap.matchDecisionState.resolvedFixtures === 'object')
+        ? snap.matchDecisionState.resolvedFixtures
+        : {},
+      pending: (snap.matchDecisionState && snap.matchDecisionState.pending) ? snap.matchDecisionState.pending : null
+    }
   };
 }
 
@@ -4254,6 +4672,48 @@ function initUI() {
     });
   }
 
+  function showMatchDecisionModal(eventData, onChoice) {
+    const modal = document.getElementById('matchDecisionModal');
+    const iconEl = document.getElementById('matchDecisionIcon');
+    const titleEl = document.getElementById('matchDecisionTitle');
+    const subtitleEl = document.getElementById('matchDecisionSubtitle');
+    const optionsEl = document.getElementById('matchDecisionOptions');
+    if (!modal || !iconEl || !titleEl || !subtitleEl || !optionsEl) {
+      onChoice(null);
+      return;
+    }
+
+    iconEl.textContent = eventData.event.icon;
+    titleEl.textContent = eventData.event.title;
+    subtitleEl.textContent = eventData.event.description(eventData.ctx);
+    optionsEl.innerHTML = '';
+
+    const userTeam = userTeamRef();
+    eventData.event.options.forEach(function(opt) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'match-decision-option';
+      btn.innerHTML = '<div class="match-decision-option__label">' + opt.label + '</div><div class="match-decision-option__desc">' + opt.description + '</div>';
+      const cost = opt && opt.effect && opt.effect.financeCost ? opt.effect.financeCost : 0;
+      const hasFinance = !!(userTeam && userTeam.finance);
+      const canAfford = !cost || (hasFinance && (userTeam.finance.capital || 0) >= cost);
+      if (!canAfford) {
+        btn.disabled = true;
+        btn.classList.add('is-disabled');
+      }
+      btn.addEventListener('click', function() {
+        if (btn.disabled) return;
+        modal.style.display = 'none';
+        modal.setAttribute('aria-hidden', 'true');
+        onChoice(opt.effect);
+      });
+      optionsEl.appendChild(btn);
+    });
+
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
   function handleSeasonFinished(result) {
     const userTeam = userTeamRef();
     const isBankrupt = result.bankrupt && userTeam && Nexus.checkBankruptcy(userTeam);
@@ -4329,73 +4789,88 @@ function initUI() {
   const simBtn = document.getElementById('btnSim');
   if (simBtn) {
     simBtn.addEventListener('click', () => {
-      const previousPhase = season ? season.phase : null;
-      const result = Nexus.playNextStage(season, environmentMap, meta);
-      if (result.newMeta) {
-        meta = result.newMeta;
-        showMetaChangedNotification();
-      }
-      if (result.newMeta && Nexus.runPostMetaShiftAdaptation) Nexus.runPostMetaShiftAdaptation(season, result.newMeta, (league && league[0]) ? league[0].name : null);
+      function doSim() {
+        const previousPhase = season ? season.phase : null;
+        const result = Nexus.playNextStage(season, environmentMap, meta);
+        if (result.newMeta) {
+          meta = result.newMeta;
+          showMetaChangedNotification();
+        }
+        if (result.newMeta && Nexus.runPostMetaShiftAdaptation) Nexus.runPostMetaShiftAdaptation(season, result.newMeta, (league && league[0]) ? league[0].name : null);
 
-      if (result.finished && season.phase === 'finished') {
-        handleSeasonFinished(result);
-        return;
-      }
+        if (result.finished && season.phase === 'finished') {
+          handleSeasonFinished(result);
+          return;
+        }
 
-      const runPostStageUpdates = () => {
-        const wasRegular = season.phase === 'regular';
-        const wasMatchday = result.matchdayResults && result.matchdayResults.length > 0;
-        if (wasRegular && wasMatchday) {
-          if (season.transferMarketRefreshCountdown != null) {
-            season.transferMarketRefreshCountdown--;
-            if (season.transferMarketRefreshCountdown <= 0 && Nexus.refreshTransferMarket && league && league[0]) {
-              Nexus.refreshTransferMarket(season, [...league, ...(challengerLeague || [])], league[0].name);
+        const runPostStageUpdates = () => {
+          const wasRegular = season.phase === 'regular';
+          const wasMatchday = result.matchdayResults && result.matchdayResults.length > 0;
+          if (wasRegular && wasMatchday) {
+            if (season.transferMarketRefreshCountdown != null) {
+              season.transferMarketRefreshCountdown--;
+              if (season.transferMarketRefreshCountdown <= 0 && Nexus.refreshTransferMarket && league && league[0]) {
+                Nexus.refreshTransferMarket(season, [...league, ...(challengerLeague || [])], league[0].name);
+              }
             }
+            saveGameState();
           }
-          saveGameState();
+
+          if (result.matchdayResults) console.log('Matchday Results:', result.matchdayResults);
+          if (result.playoffWinners) console.log('Playoff winners:', result.playoffWinners);
+          if (result.champion) console.log('Champion:', result.champion.name);
+          if (result.relegationResults) console.log('Relegation:', result.relegationResults);
+          updateFixtureUI(season);
+          updateStandingsUI(season);
+          updateScheduleUI(season);
+          updateCareerUI(season);
+          updateFinanceUI(userTeamRef());
+          updateCycleUI();
+        };
+
+        const userTeam = userTeamRef();
+        if (previousPhase === 'regular' && result.matchdayResults && result.matchdayResults.length && userTeam) {
+          const ourMatch = result.matchdayResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
+          if (ourMatch) {
+            pendingAfterMatchResult = runPostStageUpdates;
+            showMatchResultPage(ourMatch.match, ourMatch.result, season);
+            return;
+          }
         }
 
-        if (result.matchdayResults) console.log('Matchday Results:', result.matchdayResults);
-        if (result.playoffWinners) console.log('Playoff winners:', result.playoffWinners);
-        if (result.champion) console.log('Champion:', result.champion.name);
-        if (result.relegationResults) console.log('Relegation:', result.relegationResults);
-        updateFixtureUI(season);
-        updateStandingsUI(season);
-        updateScheduleUI(season);
-        updateCareerUI(season);
-        updateFinanceUI(userTeamRef());
-        updateCycleUI();
-      };
-
-      const userTeam = userTeamRef();
-      if (previousPhase === 'regular' && result.matchdayResults && result.matchdayResults.length && userTeam) {
-        const ourMatch = result.matchdayResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
-        if (ourMatch) {
-          pendingAfterMatchResult = runPostStageUpdates;
-          showMatchResultPage(ourMatch.match, ourMatch.result, season);
-          return;
+        if (previousPhase === 'playoffs' && result.roundResults && result.roundResults.length && userTeam) {
+          const ourPlayoff = result.roundResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
+          if (ourPlayoff) {
+            pendingAfterMatchResult = runPostStageUpdates;
+            showMatchResultPage(ourPlayoff.match, ourPlayoff.result, season);
+            return;
+          }
         }
+
+        if (previousPhase === 'relegation' && result.relegationMatchResults && result.relegationMatchResults.length && userTeam) {
+          const ourRel = result.relegationMatchResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
+          if (ourRel) {
+            pendingAfterMatchResult = runPostStageUpdates;
+            showMatchResultPage(ourRel.match, ourRel.result, season);
+            return;
+          }
+        }
+
+        runPostStageUpdates();
       }
 
-      if (previousPhase === 'playoffs' && result.roundResults && result.roundResults.length && userTeam) {
-        const ourPlayoff = result.roundResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
-        if (ourPlayoff) {
-          pendingAfterMatchResult = runPostStageUpdates;
-          showMatchResultPage(ourPlayoff.match, ourPlayoff.result, season);
-          return;
-        }
-      }
+      const _userT = userTeamRef ? userTeamRef() : (league && league[0]);
+      const userIsPlaying = !!(season && _userT && getMatchDecisionFixture(season, _userT));
+      const decisionEvent = userIsPlaying && _userT ? pickMatchDecisionEvent(season, _userT) : null;
 
-      if (previousPhase === 'relegation' && result.relegationMatchResults && result.relegationMatchResults.length && userTeam) {
-        const ourRel = result.relegationMatchResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
-        if (ourRel) {
-          pendingAfterMatchResult = runPostStageUpdates;
-          showMatchResultPage(ourRel.match, ourRel.result, season);
-          return;
-        }
+      if (decisionEvent) {
+        showMatchDecisionModal(decisionEvent, function(effect) {
+          if (effect) applyMatchDecisionEffect(season, _userT, effect);
+          doSim();
+        });
+      } else {
+        doSim();
       }
-
-      runPostStageUpdates();
     });
   }
 
