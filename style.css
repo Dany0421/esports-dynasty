@@ -2384,3 +2384,73 @@ body {
 .inbox-job-offer-name { flex: 1; font-weight: 600; color: #e8f4ff; }
 .inbox-job-offer-salary { font-size: 0.85rem; color: #4a6272; }
 .inbox-job-offer-btn { flex-shrink: 0; }
+
+/* Inbox mobile tuning */
+@media (max-width: 768px) {
+  .inbox-tabs-bar {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    background: #0a1014;
+    padding-top: 0.35rem;
+  }
+
+  .inbox-body {
+    height: auto;
+    min-height: 0;
+  }
+
+  .inbox-panel {
+    flex-direction: column;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .inbox-list {
+    width: 100%;
+    min-width: 0;
+    max-height: 38dvh;
+    border-right: none;
+    border-bottom: 1px solid #1e2d3a;
+  }
+
+  .inbox-viewer {
+    min-height: 44dvh;
+    padding: 0.9rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .inbox-viewer > .inbox-mail-view,
+  .inbox-viewer > .inbox-chat-view {
+    overflow: visible;
+  }
+
+  .inbox-chat-messages {
+    flex: 0 1 auto;
+    max-height: 34dvh;
+    margin-bottom: 0.75rem;
+  }
+
+  .inbox-options {
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(180deg, rgba(15, 30, 42, 0) 0%, #0f1e2a 30%);
+    padding-top: 0.5rem;
+    padding-bottom: 0.15rem;
+  }
+
+  .inbox-option-btn {
+    white-space: normal;
+    line-height: 1.25;
+  }
+
+  .inbox-msg {
+    max-width: 95%;
+  }
+
+  .inbox-job-offer-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+}
