@@ -35,6 +35,7 @@
         <button class="menu__item" data-route="season">Season</button>
         <button class="menu__item" data-route="career">Career</button>
         <button class="menu__item" data-route="operations">Operations</button>
+        <button class="menu__item inbox-nav-btn" data-route="inbox">Inbox <span class="inbox-nav-badge" id="inboxNavBadge" style="display:none"></span></button>
       </nav>
 
       <div class="sidebar__meta">
@@ -75,28 +76,45 @@
       <section class="page is-active" data-page="overview">
 
         <section class="panel panel--highlight" id="fixturePanel">
-          <h2 id="uiFixtureTitle">Next Fixture</h2>
-          <div class="fixture__matchday" id="uiMatchdayInfo">Matchday —</div>
-          <div class="fixture">
-            <div class="fixture__team">
-              <span class="badge badge--you" id="uiBadgeLeft">YOU</span>
-              <span id="uiTeamName">Nexus Core</span>
+          <div class="fixture-panel__row">
+            <div class="fixture-panel__left">
+              <h2 id="uiFixtureTitle">Next Fixture</h2>
+              <div class="fixture__matchday" id="uiMatchdayInfo">Matchday —</div>
+              <div class="fixture">
+                <div class="fixture__team">
+                  <span class="badge badge--you" id="uiBadgeLeft">YOU</span>
+                  <span id="uiTeamName">Nexus Core</span>
+                </div>
+                <div class="fixture__vs">VS</div>
+                <div class="fixture__team">
+                  <span class="badge" id="uiBadgeRight">OPP</span>
+                  <span id="uiOpponent">Crimson Arc</span>
+                </div>
+              </div>
+              <div class="fixture__meta">
+                <div class="fixture__meta-main">
+                  <div><strong>Meta:</strong> <span id="uiMetaName">—</span></div>
+                  <div><strong>Map:</strong> <span id="uiFixtureMap">—</span></div>
+                  <div><strong>Environment:</strong> Balanced</div>
+                  <div id="uiMetaDesc" class="fixture__meta-desc"></div>
+                </div>
+                <div class="fixture__power-vs-opp"><strong>Win probability:</strong> <span id="uiFixturePowerVsOpponent">—</span></div>
+              </div>
             </div>
-            <div class="fixture__vs">VS</div>
-            <div class="fixture__team">
-              <span class="badge" id="uiBadgeRight">OPP</span>
-              <span id="uiOpponent">Crimson Arc</span>
+            <div class="fixture-panel__right">
+              <div class="fixture__bootcamp" id="uiFixtureBootcamp">
+                <div class="fixture__bootcamp-title">Bootcamp</div>
+                <div class="fixture__bootcamp-body">No active bootcamp.</div>
+              </div>
             </div>
           </div>
-          <div class="fixture__meta">
-            <div><strong>Meta:</strong> <span id="uiMetaName">—</span></div>
-            <div id="uiMetaDesc" class="fixture__meta-desc"></div>
-            <div><strong>Map:</strong> <span id="uiFixtureMap">—</span></div>
-            <div><strong>Environment:</strong> Balanced</div>
-          </div>
-          <div class="fixture__actions">
-            <button class="btn btn--primary" id="btnSim">Simulate Match</button>
-            <div class="fixture__actions-right">
+          <div class="fixture-panel__row fixture-panel__actions-row">
+            <div class="fixture-panel__left">
+              <div class="fixture__actions">
+                <button class="btn btn--primary" id="btnSim">Simulate Match</button>
+              </div>
+            </div>
+            <div class="fixture-panel__right fixture-panel__right-actions">
               <button class="btn" id="btnSave">Save</button>
               <button class="btn" id="btnNewCareer">Start New Career</button>
             </div>
@@ -114,12 +132,16 @@
               </div>
               <div class="status">
                 <div class="status__k">Momentum</div>
-                <div class="status__v" id="uiMomentum">+1</div>
+                <div class="status__v" id="uiMomentum">0</div>
               </div>
               <div class="status">
                 <div class="status__k">Confidence</div>
                 <div class="status__v" id="uiConfidence">Medium</div>
               </div>
+            </div>
+            <div class="form-strip-row">
+              <span class="form-strip-label">Form</span>
+              <div id="uiFormStrip" class="form-strip"><span class="form-dot form-dot--empty">No results yet</span></div>
             </div>
             <div class="age-distribution" id="uiAgeDistribution">
               <div class="status"><div class="status__k">Avg age</div><div class="status__v" id="uiAvgAge">—</div></div>
@@ -204,10 +226,23 @@
               <strong>Contract</strong>
               <p id="playerDetailContract">—</p>
             </div>
+            <div class="player-detail-modal__section" id="playerDetailMoraleSection">
+              <strong>Morale</strong>
+              <div class="morale-bar-wrap">
+                <div class="morale-bar" id="playerDetailMoraleBar"></div>
+              </div>
+              <p id="playerDetailMoraleLabel">—</p>
+            </div>
+            <div class="player-detail-modal__section" id="playerDetailInjurySection" style="display:none;">
+              <strong>Injury</strong>
+              <p id="playerDetailInjuryStatus">—</p>
+              <button type="button" class="btn btn--warning" id="playerDetailClinicVisit">Send to Clinic ($—)</button>
+            </div>
             <div class="player-detail-modal__actions">
               <button type="button" class="btn btn--secondary" id="playerDetailMoveToBench" style="display:none;">Move to bench</button>
               <button type="button" class="btn btn--secondary" id="playerDetailMoveToStarter" style="display:none;">Move to starter</button>
               <button type="button" class="btn btn--primary" id="playerDetailOfferContract">Offer new contract</button>
+              <button type="button" class="btn btn--secondary" id="playerDetailTransferList">Transfer list</button>
               <button type="button" class="btn btn--danger" id="playerDetailSell">Sell</button>
             </div>
             <button type="button" class="modal__close" id="playerDetailClose" aria-label="Close">×</button>
@@ -348,14 +383,41 @@
             <button type="button" class="btn operations-tab" data-operations-tab="facilities">Facilities</button>
             <button type="button" class="btn operations-tab" data-operations-tab="psychology">Psychology</button>
             <button type="button" class="btn operations-tab" data-operations-tab="sponsors">Sponsors</button>
+            <button type="button" class="btn operations-tab" data-operations-tab="bootcamp">Bootcamp</button>
           </div>
           <div id="operationsContent" class="operations-content">
             <div id="operationsCoaches" class="operations-panel is-visible" data-panel="coaches"></div>
             <div id="operationsFacilities" class="operations-panel" data-panel="facilities"></div>
             <div id="operationsPsychology" class="operations-panel" data-panel="psychology"></div>
             <div id="operationsSponsors" class="operations-panel" data-panel="sponsors"></div>
+            <div id="operationsBootcamp" class="operations-panel" data-panel="bootcamp"></div>
           </div>
         </section>
+      </section>
+
+      <section class="page" data-page="inbox">
+        <div class="inbox-tabs-bar">
+          <button class="inbox-tab-btn is-active" id="inboxTabMails">
+            Mails <span class="inbox-tab-badge" id="inboxMailUnread" style="display:none"></span>
+          </button>
+          <button class="inbox-tab-btn" id="inboxTabChats">
+            Chats <span class="inbox-tab-badge" id="inboxChatUnread" style="display:none"></span>
+          </button>
+        </div>
+        <div class="inbox-body">
+          <div class="inbox-panel" id="inboxMailsPanel">
+            <div class="inbox-list" id="inboxMailList"></div>
+            <div class="inbox-viewer" id="inboxMailViewer">
+              <div class="inbox-placeholder"><p>Select a mail to read.</p></div>
+            </div>
+          </div>
+          <div class="inbox-panel" id="inboxChatsPanel" style="display:none">
+            <div class="inbox-list" id="inboxChatList"></div>
+            <div class="inbox-viewer" id="inboxChatViewer">
+              <div class="inbox-placeholder"><p>Select a conversation.</p></div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- Global modals (visible from any page) -->
@@ -419,7 +481,7 @@
       </div>
 
       <div class="modal-overlay is-hidden" id="pastSeasonDetailModal" aria-hidden="true">
-        <div class="modal">
+        <div class="modal past-season-detail-modal">
           <h3 class="modal__title" id="pastSeasonDetailTitle">Season —</h3>
           <div class="career-summary" id="pastSeasonDetailSummary">
             <!-- Your season: Position, Record, Outcome, Retired, Champion (career-row style) -->

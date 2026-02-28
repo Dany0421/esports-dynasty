@@ -18,6 +18,13 @@ const CHALLENGER_TEAM_NAMES = [
   'M80', 'The Guard', 'Shopify Rebellion', 'Oxygen Esports', 'Ghost Gaming', 'KRÜ Esports'
 ];
 
+const INTERNATIONAL_TEAM_POOLS = {
+  EU:    ['Team Vitality', 'NaVi', 'BIG Clan', 'Astralis', 'FaZe', 'OG'],
+  APAC:  ['T1', 'Paper Rex', 'ZETA Division', 'BOOM', 'Rex Regum'],
+  LATAM: ['9z Team', 'Isurus Gaming', 'Infinity', 'Netcorp'],
+  SA:    ['paiN Gaming', 'INTZ', 'Fluxo', 'Liberty']
+};
+
 // Single pool of gaming tags (one tag per player, no first/last). Deduplicated; assignment avoids repeats via usedPlayerNames.
 const GAMING_NAMES = [
   'TenZ', 's1mple', 'ZywOo', 'cNed', 'Chronicle', 'Leo', 'Aspas', 'Less', 'saadhak', 'pANcada',
@@ -51,6 +58,28 @@ const STAT_KEYS = [
   'aim', 'reaction', 'gameSense', 'positioning', 'utilityIQ', 'decisionSpeed',
   'adaptability', 'consistency', 'mental', 'communication'
 ];
+
+// --- Injury system constants ---
+const INJURY_TYPES = {
+  RSI:       { label: 'RSI',        affectedStats: ['aim', 'reaction', 'decisionSpeed'] },
+  Burnout:   { label: 'Burnout',    affectedStats: ['mental', 'consistency', 'gameSense'] },
+  EyeStrain: { label: 'Eye Strain', affectedStats: ['aim', 'reaction'] },
+  Illness:   { label: 'Illness',    affectedStats: ['aim', 'reaction', 'gameSense', 'positioning', 'utilityIQ', 'decisionSpeed', 'adaptability', 'consistency', 'mental', 'communication'] },
+  BackPain:  { label: 'Back Pain',  affectedStats: ['positioning', 'consistency'] }
+};
+
+// powerPenalty: multiplied against player matchPower (0.10 = -10%)
+// trainingMult: growth multiplier while injured
+// canPlay: false = blocked from starters
+// aggravateChance: chance of becoming Major when playing with this severity
+const INJURY_SEVERITY = {
+  Minor:    { matchdays: [1, 3],   powerPenalty: 0.10, trainingMult: 0.5,  canPlay: true,  aggravateChance: 0    },
+  Moderate: { matchdays: [4, 7],   powerPenalty: 0.25, trainingMult: 0.20, canPlay: true,  aggravateChance: 0.30 },
+  Major:    { matchdays: [8, 14],  powerPenalty: 1.0,  trainingMult: 0,    canPlay: false, aggravateChance: 0    }
+};
+
+// Clinic visit cost to treat (Minor: instant heal, Moderate: instant heal, Major: reduce to Moderate 3md remaining)
+const INJURY_CLINIC_COST = { Minor: 15000, Moderate: 35000, Major: 60000 };
 
 // --- Role definitions (for affinity scoring; NOT gameplay yet) ---
 // We keep your weights idea, but treat it as an AFFINITY model.
@@ -364,7 +393,13 @@ function createPlayer(roleBias = null, ageOverride = null) {
     traits,
 
     // Optional debug info (keep for dev; can remove later)
-    roleScores: allScores
+    roleScores: allScores,
+
+    // Injury state: null = healthy. When injured: { type, severity, matchdaysLeft, affectedStats }
+    injury: null,
+
+    // Morale: 0-100. Affects match power, contract negotiations, transfer requests.
+    morale: 70
   };
 }
 
@@ -395,6 +430,8 @@ function createTeam(teamName, tier = 'Main') {
     bench,
     players,
     youthAcademy: [],
+    activeBootcamp: null,
+    bootcampUsageThisSeason: {},
     tier,
     prestige: tier === 'Main' ? 60 + Math.floor(Math.random() * 20) : 30 + Math.floor(Math.random() * 15),
     budgetMultiplier: tier === 'Main' ? 1.0 : 0.7
@@ -406,8 +443,8 @@ window.Nexus = window.Nexus || {};
 window.Nexus.YOUTH_MARKET = window.Nexus.YOUTH_MARKET || [];
 
 function createYouthProspect() {
-  // Mostly 16–17; 15 is rare (~8%)
-  const age = chance(0.08) ? 15 : (chance(0.5) ? 16 : 17);
+  // Mostly 16–17; 15 is rare (~8%); 14 is very rare (~1.5%).
+  const age = chance(0.015) ? 14 : (chance(0.08) ? 15 : (chance(0.5) ? 16 : 17));
   const stats = {};
   STAT_KEYS.forEach(k => {
     const current = randomInt(35, 55);
@@ -581,7 +618,7 @@ function trainYouthProspect({ team, prospect, statKey, environment, season }) {
 window.Nexus.trainYouthProspect = trainYouthProspect;
 
 function generateYouthMarket() {
-  const count = randomInt(12, 15);
+  const count = 30;
   const prospects = [];
   for (let i = 0; i < count; i++) prospects.push(createYouthProspect());
   return prospects;
@@ -767,7 +804,7 @@ function createMeta({
 
 // 2. EFFECTIVE CAP CALCULATION
 
-function calculateEffectiveCap({ player, statKey, environment, meta }) {
+function calculateEffectiveCap({ player, statKey, environment, meta, bootcampEffect }) {
   const stat = player.stats[statKey];
   const baseMax = stat.maxCap;
 
@@ -780,12 +817,18 @@ function calculateEffectiveCap({ player, statKey, environment, meta }) {
 
   // Pressure vs Mental interaction (psychology reduces effective pressure)
   const mental = (player.stats.mental && player.stats.mental.current != null) ? player.stats.mental.current : 50;
+  const mentalBoost = (bootcampEffect && bootcampEffect.mentalBoost != null) ? bootcampEffect.mentalBoost : 0;
+  const effectiveMental = clamp(mental + mentalBoost, 1, 99);
   const rawPressure = environment.pressure != null ? environment.pressure : 50;
   const psychSupport = environment.psychologySupport != null ? environment.psychologySupport : 50;
   const psychTier = PSYCHOLOGY_TIERS && PSYCHOLOGY_TIERS.find(function(t) { return t.support === psychSupport; });
   const pressureReduction = (psychTier && psychTier.pressureReduction != null) ? psychTier.pressureReduction : 0;
-  const effectivePressure = rawPressure * (1 - pressureReduction);
-  const pressureImpact = (effectivePressure - mental) / 100;
+  let effectivePressure = rawPressure * (1 - pressureReduction);
+  if (bootcampEffect && bootcampEffect.pressureReduction != null) {
+    const extraReduction = clamp(bootcampEffect.pressureReduction, 0, 0.9);
+    effectivePressure *= (1 - extraReduction);
+  }
+  const pressureImpact = (effectivePressure - effectiveMental) / 100;
   modifier -= pressureImpact * 0.05 * baseMax;
 
   // Meta alignment bonus (if stat aligns with favored role bias)
@@ -805,9 +848,9 @@ function calculateEffectiveCap({ player, statKey, environment, meta }) {
 
 // 3. EFFECTIVE CURRENT VALUE
 
-function calculateEffectiveCurrent({ player, statKey, environment, meta }) {
+function calculateEffectiveCurrent({ player, statKey, environment, meta, bootcampEffect }) {
   const stat = player.stats[statKey];
-  const effectiveCap = calculateEffectiveCap({ player, statKey, environment, meta });
+  const effectiveCap = calculateEffectiveCap({ player, statKey, environment, meta, bootcampEffect });
 
   // Current cannot exceed effective cap
   return Math.min(stat.current, effectiveCap);
@@ -1085,6 +1128,18 @@ function getTraitGrowthModifier(player, statKey) {
 function growStat({ player, statKey, environment, meta, growthMultiplier }) {
   const stat = player.stats[statKey];
 
+  // Injury reduces or blocks training
+  const inj = getPlayerInjury(player);
+  if (inj) {
+    const sevDef = INJURY_SEVERITY[inj.severity];
+    if (sevDef && sevDef.trainingMult === 0) return 0; // Major: no training
+    const injMult = sevDef ? sevDef.trainingMult : 1;
+    growthMultiplier = (growthMultiplier != null ? growthMultiplier : 1) * injMult;
+  }
+
+  // Morale affects training growth
+  growthMultiplier = (growthMultiplier != null ? growthMultiplier : 1) * getMoraleTrainingMultiplier(player.morale);
+
   const effectiveCap = calculateEffectiveCap({ player, statKey, environment, meta });
 
   if (stat.current >= effectiveCap) return 0;
@@ -1182,16 +1237,26 @@ function getRoleFitMultiplier(player) {
 const META_FAVORED_BONUS = 1.12;   // +12% when role is in meta.favoredRoles
 const META_NERFED_PENALTY = 0.90;  // -10% when role is in meta.nerfedRoles
 
-function calculateRoleAdjustedCurrent({ player, statKey, environment, meta }) {
-  const baseEffective = calculateEffectiveCurrent({ player, statKey, environment, meta });
+function calculateRoleAdjustedCurrent({ player, statKey, environment, meta, bootcampEffect }) {
+  const baseEffective = calculateEffectiveCurrent({ player, statKey, environment, meta, bootcampEffect });
   let value = baseEffective * getRoleFitMultiplier(player);
 
   const role = player.assignedRole || player.roleBias.primaryRoleBias;
   if (meta && Array.isArray(meta.favoredRoles) && meta.favoredRoles.includes(role)) {
-    value *= META_FAVORED_BONUS;
+    let favoredBonus = META_FAVORED_BONUS;
+    if (bootcampEffect && bootcampEffect.metaFavoredBonus != null) {
+      favoredBonus += bootcampEffect.metaFavoredBonus;
+    }
+    value *= favoredBonus;
   }
   if (meta && Array.isArray(meta.nerfedRoles) && meta.nerfedRoles.includes(role)) {
-    value *= META_NERFED_PENALTY;
+    let nerfedPenalty = META_NERFED_PENALTY;
+    if (bootcampEffect && bootcampEffect.metaNerfedReduction != null) {
+      const reduction = clamp(bootcampEffect.metaNerfedReduction, 0, 1);
+      const penaltyStrength = 1 - META_NERFED_PENALTY;
+      nerfedPenalty = 1 - (penaltyStrength * (1 - reduction));
+    }
+    value *= nerfedPenalty;
   }
 
   return Math.round(Math.max(0, Math.min(99, value)));
@@ -1302,7 +1367,7 @@ function detectRhythmConflicts(players) {
 
 // 5. FINAL SYNERGY SCORE
 
-function calculateTeamSynergy(players, meta, environment) {
+function calculateTeamSynergy(players, meta, environment, bootcampEffect) {
   if (players.length !== 5) {
     throw new Error('Synergy requires exactly 5 players.');
   }
@@ -1351,6 +1416,10 @@ function calculateTeamSynergy(players, meta, environment) {
     }
   }
 
+  if (bootcampEffect && bootcampEffect.synergyBonus != null) {
+    synergy += bootcampEffect.synergyBonus;
+  }
+
   return {
     synergyMultiplier: Math.round(synergy * 100) / 100,
     avgCommunication: Math.round(avgComm),
@@ -1395,7 +1464,11 @@ function shouldTeamAdaptToMeta(team, meta) {
 }
 
 function buildBestLineup(team, meta) {
-  const allPlayers = [...team.players];
+  // Exclude Major-injured players from lineup consideration
+  const allPlayers = (team.players || []).filter(p => {
+    const inj = getPlayerInjury(p);
+    return !inj || inj.severity !== 'Major';
+  });
 
   function roleStrength(player, role) {
     const roleDef = ROLES[role];
@@ -1467,23 +1540,30 @@ function getPlayerOverall(player) {
   return Math.round(avg);
 }
 
-function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoosts }) {
+function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoosts, bootcampEffect, useVariance }) {
   let total = 0;
   const infrastructure = (environment && environment.infrastructure != null) ? environment.infrastructure : 50;
   const varianceReduction = (infrastructure - 50) / 100;
+  const hasBootcamp = !!bootcampEffect;
+  const applyVariance = useVariance !== false;
 
   STAT_KEYS.forEach(statKey => {
     const baseAdjusted = calculateRoleAdjustedCurrent({
       player,
       statKey,
       environment,
-      meta
+      meta,
+      bootcampEffect
     });
     let adjusted = baseAdjusted;
     if (meta && meta.statBonuses && meta.statBonuses[statKey] != null) {
       adjusted *= meta.statBonuses[statKey];
     }
-    if (teamTrainingBoosts && teamTrainingBoosts[statKey]) {
+    if (bootcampEffect && bootcampEffect.statBoosts && bootcampEffect.statBoosts[statKey] != null) {
+      adjusted *= bootcampEffect.statBoosts[statKey];
+    } else if (bootcampEffect && bootcampEffect.allStatsBonus != null) {
+      adjusted *= bootcampEffect.allStatsBonus;
+    } else if (!hasBootcamp && teamTrainingBoosts && teamTrainingBoosts[statKey]) {
       adjusted *= teamTrainingBoosts[statKey];
     }
     // Recap stacked bonus/penalty relative to role-adjusted base BEFORE variance.
@@ -1491,14 +1571,31 @@ function calculatePlayerMatchPower({ player, environment, meta, teamTrainingBoos
     const maxFromBase = baseAdjusted * (1 + MATCH_POWER_MAX_BONUS_FROM_BASE);
     adjusted = clamp(adjusted, minFromBase, maxFromBase);
 
-    const reducedVariance = 1 + (Math.random() - 0.5) * 0.2 * (1 - varianceReduction);
+    const reducedVariance = applyVariance
+      ? 1 + (Math.random() - 0.5) * 0.2 * (1 - varianceReduction)
+      : 1;
     adjusted *= reducedVariance;
 
     // Final stat recap AFTER variance to avoid random spikes.
     total += clamp(adjusted, MATCH_POWER_HARD_MIN, MATCH_POWER_HARD_MAX);
   });
 
-  return clamp(total / STAT_KEYS.length, MATCH_POWER_HARD_MIN, MATCH_POWER_HARD_MAX);
+  let basePower = clamp(total / STAT_KEYS.length, MATCH_POWER_HARD_MIN, MATCH_POWER_HARD_MAX);
+
+  // Apply injury penalty
+  const inj = getPlayerInjury(player);
+  if (inj) {
+    const sevDef = INJURY_SEVERITY[inj.severity];
+    if (sevDef) basePower *= (1 - sevDef.powerPenalty);
+  }
+
+  // Apply individual player form multiplier (hot/cold)
+  basePower *= getPlayerFormMultiplier(player);
+
+  // Apply morale multiplier
+  basePower *= getMoraleMatchMultiplier(player.morale);
+
+  return clamp(basePower, MATCH_POWER_HARD_MIN, MATCH_POWER_HARD_MAX);
 }
 
 // PART 3 — TEAM MATCH POWER
@@ -1898,10 +1995,237 @@ function applyMatchDecisionEffect(season, userTeam, effect) {
   markMatchDecisionResolved(season, fixtureKey, pending && pending.eventId ? pending.eventId : null);
 }
 
+const BOOTCAMP_TYPES = [
+  {
+    id: 'meta-adaptation',
+    icon: 'META',
+    name: 'Meta Adaptation Camp',
+    description: 'Fast prep to exploit favored roles and soften nerfs.',
+    effectDescription: '+8% favored-role meta bonus, 12% nerf reduction',
+    cost: 60000,
+    duration: 3,
+    effect: {
+      type: 'meta',
+      metaFavoredBonus: 0.08,
+      metaNerfedReduction: 0.12
+    }
+  },
+  {
+    id: 'mechanical-bootcamp',
+    icon: 'MECH',
+    name: 'Mechanical Skill Camp',
+    description: 'Raw dueling focus: aim, reactions, and snap decisions.',
+    effectDescription: '+10% aim, +8% reaction, +6% decision speed',
+    cost: 55000,
+    duration: 3,
+    effect: {
+      type: 'stats',
+      statBoosts: {
+        aim: 1.10,
+        reaction: 1.08,
+        decisionSpeed: 1.06
+      }
+    }
+  },
+  {
+    id: 'tactical-bootcamp',
+    icon: 'TACT',
+    name: 'Tactical IQ Camp',
+    description: 'Macro-heavy prep focused on utility and spacing.',
+    effectDescription: '+10% game sense, +8% utility IQ, +6% positioning',
+    cost: 55000,
+    duration: 3,
+    effect: {
+      type: 'stats',
+      statBoosts: {
+        gameSense: 1.10,
+        utilityIQ: 1.08,
+        positioning: 1.06
+      }
+    }
+  },
+  {
+    id: 'synergy-bootcamp',
+    icon: 'SYNC',
+    name: 'Team Synergy Camp',
+    description: 'Team coordination drills for cleaner executes and retakes.',
+    effectDescription: '+6% team synergy',
+    cost: 50000,
+    duration: 4,
+    effect: {
+      type: 'synergy',
+      synergyBonus: 0.06
+    }
+  },
+  {
+    id: 'mental-bootcamp',
+    icon: 'MIND',
+    name: 'Mental Resilience Camp',
+    description: 'Pressure-control sessions with focused resilience routines.',
+    effectDescription: '-15% pressure impact and +5 effective mental',
+    cost: 40000,
+    duration: 5,
+    effect: {
+      type: 'mental',
+      pressureReduction: 0.15,
+      mentalBoost: 5
+    }
+  },
+  {
+    id: 'championship-bootcamp',
+    icon: 'CHMP',
+    name: 'Championship Prep',
+    description: 'High-intensity short prep for title races.',
+    effectDescription: '+12% all stats and +8% team synergy',
+    cost: 120000,
+    duration: 2,
+    effect: {
+      type: 'championship',
+      allStatsBonus: 1.12,
+      synergyBonus: 0.08
+    }
+  }
+];
+
+function getBootcampById(bootcampId) {
+  if (!bootcampId) return null;
+  return BOOTCAMP_TYPES.find(function(b) { return b.id === bootcampId; }) || null;
+}
+
+function initializeBootcampSeasonUsage(team) {
+  if (!team) return {};
+  if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') {
+    team.bootcampUsageThisSeason = {};
+  }
+  return team.bootcampUsageThisSeason;
+}
+
+function hasTeamUsedBootcampThisSeason(team, bootcampId) {
+  if (!team || !bootcampId) return false;
+  const usage = initializeBootcampSeasonUsage(team);
+  return !!usage[bootcampId];
+}
+
+function markBootcampUsedThisSeason(team, bootcampId) {
+  if (!team || !bootcampId) return;
+  const usage = initializeBootcampSeasonUsage(team);
+  usage[bootcampId] = true;
+}
+
+function resetBootcampUsageForSeason(teams) {
+  const list = Array.isArray(teams) ? teams : [];
+  list.forEach(function(team) {
+    if (!team) return;
+    team.activeBootcamp = null;
+    team.bootcampUsageThisSeason = {};
+  });
+}
+
+function getTeamActiveBootcampEffect(team) {
+  if (!team || !team.activeBootcamp) return null;
+  const remaining = team.activeBootcamp.remainingMatchdays != null ? team.activeBootcamp.remainingMatchdays : 0;
+  if (remaining <= 0) return null;
+  return team.activeBootcamp.effect || null;
+}
+
+function activateBootcamp(team, bootcampId) {
+  const bootcamp = getBootcampById(bootcampId);
+  if (!team || !bootcamp) return { success: false, message: 'Bootcamp not found.' };
+  if (hasTeamUsedBootcampThisSeason(team, bootcamp.id)) {
+    return { success: false, message: 'This bootcamp is locked for the rest of the season.' };
+  }
+  if (team.activeBootcamp && (team.activeBootcamp.remainingMatchdays || 0) > 0) {
+    return { success: false, message: 'A bootcamp is already active.' };
+  }
+  if (!team.finance) return { success: false, message: 'No finance data available.' };
+  const capital = team.finance.capital || 0;
+  if (capital < bootcamp.cost) return { success: false, message: 'Insufficient funds.' };
+
+  team.finance.capital = capital - bootcamp.cost;
+  team.activeBootcamp = {
+    id: bootcamp.id,
+    name: bootcamp.name,
+    remainingMatchdays: bootcamp.duration,
+    effect: JSON.parse(JSON.stringify(bootcamp.effect || {}))
+  };
+  markBootcampUsedThisSeason(team, bootcamp.id);
+
+  return {
+    success: true,
+    bootcamp: team.activeBootcamp,
+    message: 'Activated ' + bootcamp.name + ' for ' + bootcamp.duration + ' matchdays.'
+  };
+}
+
+function getTeamReputationScore(team) {
+  if (!team) return 50;
+  if (team.reputation != null) return team.reputation;
+  if (team.prestige != null) return team.prestige;
+  return 50;
+}
+
+function selectRandomBootcamp(team) {
+  if (!team || !team.finance) return null;
+  if (team.activeBootcamp && (team.activeBootcamp.remainingMatchdays || 0) > 0) return null;
+  const affordable = BOOTCAMP_TYPES.filter(function(type) {
+    return (team.finance.capital || 0) >= type.cost && !hasTeamUsedBootcampThisSeason(team, type.id);
+  });
+  if (!affordable.length) return null;
+  return affordable[randomInt(0, affordable.length - 1)];
+}
+
+function shouldAIActivateBootcamp(aiTeam, opponentTeam) {
+  if (!aiTeam || !opponentTeam || aiTeam === opponentTeam) return null;
+  const userTeam = (window.Nexus.getUserTeam && window.Nexus.getUserTeam()) || (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
+  if (userTeam && aiTeam.name === userTeam.name) return null;
+  if (aiTeam.activeBootcamp && (aiTeam.activeBootcamp.remainingMatchdays || 0) > 0) return null;
+
+  const aiReputation = getTeamReputationScore(aiTeam);
+  const oppReputation = getTeamReputationScore(opponentTeam);
+  if (oppReputation <= aiReputation) return null;
+
+  if (Math.random() >= 0.7) return null;
+  const randomBootcamp = selectRandomBootcamp(aiTeam);
+  if (!randomBootcamp) return null;
+
+  const result = activateBootcamp(aiTeam, randomBootcamp.id);
+  if (result && result.success && userTeam && opponentTeam.name === userTeam.name) {
+    if (window.Nexus.showNotification) window.Nexus.showNotification(aiTeam.name + ' activated ' + randomBootcamp.name + ' before facing you!', 'info', 5500);
+    if (typeof window.Nexus.onOpponentBootcampActivated === 'function') window.Nexus.onOpponentBootcampActivated(aiTeam.name, randomBootcamp.name);
+  }
+  return result;
+}
+
+function tickBootcampDuration(teams) {
+  const list = Array.isArray(teams) ? teams : [];
+  const userTeam = (window.Nexus.getUserTeam && window.Nexus.getUserTeam()) || (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
+  let expiredUserBootcamp = null;
+
+  list.forEach(function(team) {
+    if (!team || !team.activeBootcamp) return;
+    const remaining = team.activeBootcamp.remainingMatchdays != null ? team.activeBootcamp.remainingMatchdays : 0;
+    const nextRemaining = remaining - 1;
+    team.activeBootcamp.remainingMatchdays = nextRemaining;
+    if (nextRemaining <= 0) {
+      if (userTeam && userTeam.name === team.name) {
+        expiredUserBootcamp = team.activeBootcamp.name || 'Bootcamp';
+      }
+      team.activeBootcamp = null;
+    }
+  });
+
+  if (expiredUserBootcamp && window.Nexus.showNotification) {
+    window.Nexus.showNotification(expiredUserBootcamp + ' expired.', 'info', 5500);
+  }
+
+  return { userExpiredBootcamp: expiredUserBootcamp };
+}
+
 window.Nexus.COACH_TIERS = COACH_TIERS;
 window.Nexus.FACILITY_TIERS = FACILITY_TIERS;
 window.Nexus.PSYCHOLOGY_TIERS = PSYCHOLOGY_TIERS;
 window.Nexus.SPONSOR_TIERS = SPONSOR_TIERS;
+window.Nexus.BOOTCAMP_TYPES = BOOTCAMP_TYPES;
 
 function getCoachTier(team) {
   const level = (team && (team.coachTierLevel != null ? team.coachTierLevel : 1)) || 1;
@@ -2017,6 +2341,14 @@ function applySponsorSeasonEnd(team, seasonStandings) {
 window.Nexus.selectSponsor = selectSponsor;
 window.Nexus.checkSponsorRules = checkSponsorRules;
 window.Nexus.applySponsorSeasonEnd = applySponsorSeasonEnd;
+window.Nexus.getBootcampById = getBootcampById;
+window.Nexus.getTeamActiveBootcampEffect = getTeamActiveBootcampEffect;
+window.Nexus.activateBootcamp = activateBootcamp;
+window.Nexus.selectRandomBootcamp = selectRandomBootcamp;
+window.Nexus.shouldAIActivateBootcamp = shouldAIActivateBootcamp;
+window.Nexus.tickBootcampDuration = tickBootcampDuration;
+window.Nexus.hasTeamUsedBootcampThisSeason = hasTeamUsedBootcampThisSeason;
+window.Nexus.resetBootcampUsageForSeason = resetBootcampUsageForSeason;
 window.Nexus.getCoachTier = getCoachTier;
 window.Nexus.getFacilityTier = getFacilityTier;
 window.Nexus.getPsychologyTier = getPsychologyTier;
@@ -2025,7 +2357,8 @@ window.Nexus.getMaxYouthAcademySlots = getMaxYouthAcademySlots;
 window.Nexus.syncTeamEnvironmentFromTiers = syncTeamEnvironmentFromTiers;
 window.Nexus.syncPressureToPrestige = syncPressureToPrestige;
 
-function calculateTeamMatchPower({ team, environment, meta }) {
+function calculateTeamMatchPower({ team, environment, meta }, options) {
+  const useVariance = (options && options.useVariance) !== false;
   const nexus = window.Nexus || {};
   const userTeam =
     (nexus.getUserTeam && nexus.getUserTeam()) ||
@@ -2044,15 +2377,23 @@ function calculateTeamMatchPower({ team, environment, meta }) {
     lineup = buildBestLineup(team, meta);
   }
 
-  const synergyData = calculateTeamSynergy(lineup, meta, environment);
+  const activeBootcampEffect = getTeamActiveBootcampEffect(team);
+  const synergyData = calculateTeamSynergy(lineup, meta, environment, activeBootcampEffect);
   const synergyMultiplier = synergyData.synergyMultiplier;
 
-  const boosts = (team.activeTeamTraining && TEAM_TRAINING_PLANS[team.activeTeamTraining])
+  const boosts = (!activeBootcampEffect && team.activeTeamTraining && TEAM_TRAINING_PLANS[team.activeTeamTraining])
     ? TEAM_TRAINING_PLANS[team.activeTeamTraining].boosts
     : {};
 
   const playerPowers = lineup.map(function(p) {
-    const matchPower = calculatePlayerMatchPower({ player: p, environment, meta, teamTrainingBoosts: boosts });
+    const matchPower = calculatePlayerMatchPower({
+      player: p,
+      environment,
+      meta,
+      teamTrainingBoosts: boosts,
+      bootcampEffect: activeBootcampEffect,
+      useVariance: useVariance
+    });
     return { player: p, matchPower: matchPower };
   });
 
@@ -2080,7 +2421,8 @@ function calculateTeamMatchPower({ team, environment, meta }) {
     : 0;
 
   const shortHandedPenalty = lineup.length < 5 ? 0.85 : 1;
-  const finalPower = (avgPower * synergyMultiplier) * shortHandedPenalty;
+  const formMultiplier = getTeamFormMultiplier(team);
+  const finalPower = (avgPower * synergyMultiplier) * shortHandedPenalty * formMultiplier;
 
   return {
     finalPower,
@@ -2088,6 +2430,17 @@ function calculateTeamMatchPower({ team, environment, meta }) {
     lineup,
     playerPowers: playerPowers
   };
+}
+
+/**
+ * Deterministic team power for previews (dashboard win probability).
+ * Same logic as calculateTeamMatchPower but without variance — stable across refreshes.
+ */
+function calculateTeamExpectedPower(team, context) {
+  return calculateTeamMatchPower(
+    { team, environment: context.environment, meta: context.meta },
+    { useVariance: false }
+  );
 }
 
 function getTeamTrainingMatchModifier(team) {
@@ -2298,6 +2651,7 @@ window.Nexus.shouldTeamAdaptToMeta = shouldTeamAdaptToMeta;
 window.Nexus.adaptLineupToMeta = adaptLineupToMeta;
 window.Nexus.runPostMetaShiftAdaptation = runPostMetaShiftAdaptation;
 window.Nexus.calculateTeamMatchPower = calculateTeamMatchPower;
+window.Nexus.calculateTeamExpectedPower = calculateTeamExpectedPower;
 window.Nexus.simulateMatch = simulateMatch;
 window.Nexus.TEAM_TRAINING_PLAN_KEYS = TEAM_TRAINING_PLAN_KEYS;
 window.Nexus.TEAM_TRAINING_PLANS = TEAM_TRAINING_PLANS;
@@ -2456,6 +2810,18 @@ function playNextMatchday(season, environmentMap, meta) {
       window.Nexus.fillEmptyRosterSlotsForMatch(match.teamA);
       window.Nexus.fillEmptyRosterSlotsForMatch(match.teamB);
     }
+    if (window.Nexus.shouldAIActivateBootcamp) {
+      const involvesUser = userTeam && (
+        match.teamA === userTeam ||
+        match.teamB === userTeam ||
+        (match.teamA && match.teamA.name === userTeam.name) ||
+        (match.teamB && match.teamB.name === userTeam.name)
+      );
+      if (!involvesUser) {
+        window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
+        window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+      }
+    }
     const result = simulateMatch({
       teamA: match.teamA,
       teamB: match.teamB,
@@ -2476,11 +2842,721 @@ function playNextMatchday(season, environmentMap, meta) {
 
   const newMeta = checkForMetaShift(season);
 
+  // Process injuries: new rolls for players that played + tick recovery for all
+  const allTeams = season.teams || [];
+  const newInjuries = processMatchdayInjuries(results, allTeams, environmentMap, season, userTeam);
+
+  // Process form: update team recentForm + player recentRatings
+  processMatchdayForm(results);
+
+  // Process morale: update all players across all teams
+  const moraleEvents = processMatchdayMorale(results, allTeams, environmentMap);
+
   return {
     finished: false,
     matchdayResults: results,
-    newMeta: newMeta || undefined
+    newMeta: newMeta || undefined,
+    newInjuries,
+    moraleEvents
   };
+}
+
+// -------------------------------------------------
+// INJURY SYSTEM
+// -------------------------------------------------
+
+/**
+ * Returns the injury object for a player, or null if healthy.
+ * Safely handles old save data where injury field may be undefined.
+ */
+function getPlayerInjury(player) {
+  return (player && player.injury && player.injury.severity) ? player.injury : null;
+}
+
+/**
+ * Roll for a new injury on a player after a match.
+ * @param {object} player
+ * @param {object} environment - team environment (infrastructure, psychologySupport)
+ * @returns injury object or null
+ */
+function rollInjuryForPlayer(player, environment) {
+  // Already Major-injured: no stacking
+  const existing = getPlayerInjury(player);
+  if (existing && existing.severity === 'Major') return null;
+
+  // Base chance per matchday
+  let chance = 0.07;
+
+  // High pressure increases risk
+  const pressure = (environment && environment.pressure != null) ? environment.pressure : 50;
+  if (pressure > 70) chance += 0.04;
+  else if (pressure > 55) chance += 0.02;
+
+  // Low mental increases risk
+  const mental = player.stats && player.stats.mental ? player.stats.mental.current : 50;
+  if (mental < 40) chance += 0.04;
+  else if (mental < 55) chance += 0.02;
+
+  // Good facilities reduce risk
+  const infra = (environment && environment.infrastructure != null) ? environment.infrastructure : 50;
+  if (infra >= 80) chance -= 0.03;
+  else if (infra >= 65) chance -= 0.015;
+
+  // Psychology support reduces risk
+  const psych = (environment && environment.psychologySupport != null) ? environment.psychologySupport : 0;
+  if (psych >= 3) chance -= 0.02;
+  else if (psych >= 2) chance -= 0.01;
+
+  // Playing while Moderate: higher chance of aggravation to Major
+  if (existing && existing.severity === 'Moderate') {
+    if (Math.random() < INJURY_SEVERITY.Moderate.aggravateChance) {
+      // Aggravate to Major
+      const md = randomInt(INJURY_SEVERITY.Major.matchdays[0], INJURY_SEVERITY.Major.matchdays[1]);
+      player.injury = { type: existing.type, severity: 'Major', matchdaysLeft: md, affectedStats: existing.affectedStats };
+      return player.injury;
+    }
+    return null; // already injured, no new roll
+  }
+
+  // Low morale increases injury risk (stress/burnout)
+  chance += getMoraleInjuryRisk(player.morale);
+
+  chance = Math.max(0.01, Math.min(0.20, chance));
+  if (Math.random() > chance) return null;
+
+  // Pick injury type (contextual weights)
+  const primaryRole = player.roleBias && player.roleBias.primaryRoleBias;
+  let typeKeys = Object.keys(INJURY_TYPES);
+  // Duelists more prone to RSI, Controllers/Initiators to Burnout
+  let weights = { RSI: 2, Burnout: 2, EyeStrain: 1, Illness: 1.5, BackPain: 1 };
+  if (primaryRole === 'Duelist') weights.RSI = 4;
+  if (primaryRole === 'Controller' || primaryRole === 'Initiator') weights.Burnout = 4;
+  if (infra < 50) weights.BackPain = 3;
+  if (pressure > 65) weights.Burnout = Math.max(weights.Burnout, 3);
+
+  const totalWeight = typeKeys.reduce((s, k) => s + (weights[k] || 1), 0);
+  let r = Math.random() * totalWeight;
+  let chosenType = typeKeys[0];
+  for (const k of typeKeys) {
+    r -= (weights[k] || 1);
+    if (r <= 0) { chosenType = k; break; }
+  }
+
+  // Pick severity (biased toward Minor/Moderate)
+  const severityRoll = Math.random();
+  let severity;
+  if (severityRoll < 0.55) severity = 'Minor';
+  else if (severityRoll < 0.90) severity = 'Moderate';
+  else severity = 'Major';
+
+  const sevDef = INJURY_SEVERITY[severity];
+  const matchdaysLeft = randomInt(sevDef.matchdays[0], sevDef.matchdays[1]);
+
+  player.injury = {
+    type: chosenType,
+    severity,
+    matchdaysLeft,
+    affectedStats: INJURY_TYPES[chosenType].affectedStats
+  };
+  return player.injury;
+}
+
+/**
+ * After a matchday: trigger injury rolls for all players that played,
+ * then tick down recovery for all injured players on all teams.
+ */
+function processMatchdayInjuries(matchResults, allTeams, environmentMap) {
+  const newInjuries = []; // { player, team, injury } — returned so UI can notify
+
+  // 1. Roll for new injuries on players that played
+  matchResults.forEach(({ match, result }) => {
+    [match.teamA, match.teamB].forEach(team => {
+      const env = (environmentMap && environmentMap[team.name]) || {};
+      const lineup = (result.playerPerformances && result.playerPerformances[team.name]) || [];
+      const playedPlayers = lineup.map(x => x.player).filter(Boolean);
+      playedPlayers.forEach(player => {
+        const inj = rollInjuryForPlayer(player, env);
+        if (inj) newInjuries.push({ player, team, injury: inj });
+      });
+    });
+  });
+
+  // 2. Tick recovery for all injured players across all teams
+  const userTeam = (arguments.length >= 4 && arguments[4]) ? arguments[4] : null;
+  const seasonForChat = (arguments.length >= 4 && arguments[3]) ? arguments[3] : null;
+  allTeams.forEach(team => {
+    const allPlayers = team.players || [];
+    allPlayers.forEach(player => {
+      const inj = getPlayerInjury(player);
+      if (!inj) return;
+      const wasMajor = inj.severity === 'Major';
+      inj.matchdaysLeft--;
+      if (inj.matchdaysLeft <= 0) {
+        player.injury = null; // fully recovered
+        if (wasMajor && seasonForChat && seasonForChat.inbox && userTeam && team === userTeam && typeof triggerPlayerChat === 'function') {
+          triggerPlayerChat(seasonForChat, player, 'return_from_injury');
+        }
+      }
+    });
+  });
+
+  return newInjuries;
+}
+
+/**
+ * Apply clinic treatment to a player (spend money, reduce injury).
+ * Minor/Moderate: instant heal. Major: reduce to Moderate (3 matchdays).
+ */
+function applyClinicVisit(player, team) {
+  const inj = getPlayerInjury(player);
+  if (!inj) return { success: false, message: 'Player is not injured.' };
+
+  const cost = INJURY_CLINIC_COST[inj.severity];
+  const capital = team.capital != null ? team.capital : 0;
+  if (capital < cost) {
+    return { success: false, message: 'Not enough capital. Clinic costs $' + cost.toLocaleString() + '.' };
+  }
+
+  team.capital -= cost;
+
+  if (inj.severity === 'Minor' || inj.severity === 'Moderate') {
+    player.injury = null;
+    return { success: true, cost, message: 'Player fully recovered. Cost: $' + cost.toLocaleString() + '.' };
+  }
+  // Major → reduce to Moderate level (3 matchdays, can play again)
+  player.injury = { type: inj.type, severity: 'Moderate', matchdaysLeft: 3, affectedStats: inj.affectedStats };
+  return { success: true, cost, message: 'Injury reduced to Moderate (3 matchdays). Cost: $' + cost.toLocaleString() + '.' };
+}
+
+window.Nexus.getPlayerInjury = getPlayerInjury;
+window.Nexus.applyClinicVisit = applyClinicVisit;
+window.Nexus.INJURY_CLINIC_COST = INJURY_CLINIC_COST;
+window.Nexus.INJURY_SEVERITY = INJURY_SEVERITY;
+window.Nexus.INJURY_TYPES = INJURY_TYPES;
+
+// -------------------------------------------------
+// FORM & MOMENTUM SYSTEM
+// -------------------------------------------------
+
+/**
+ * Reset form at season start for all teams and players.
+ * Called via Nexus.initializeMomentum(season).
+ */
+function initializeMomentum(season) {
+  if (!season || !season.teams) return;
+  season.teams.forEach(team => {
+    team.recentForm = [];
+    (team.players || []).forEach(player => {
+      player.recentRatings = [];
+      player.morale = 70; // reset to neutral-positive at season start
+    });
+  });
+}
+
+/**
+ * Team momentum score: wins - losses in last 5 matches.
+ * Range: -5 (all losses) to +5 (all wins). 0 = no data yet.
+ */
+function getTeamMomentumScore(team) {
+  const form = team.recentForm || [];
+  if (!form.length) return 0;
+  const wins = form.filter(r => r === 'W').length;
+  const losses = form.filter(r => r === 'L').length;
+  return wins - losses;
+}
+
+/**
+ * Match power multiplier from team momentum.
+ * Hot streak: up to +5%. Cold streak: down to -5%.
+ */
+function getTeamFormMultiplier(team) {
+  const score = getTeamMomentumScore(team);
+  if (score >= 5) return 1.05;
+  if (score >= 3) return 1.03;
+  if (score >= 1) return 1.01;
+  if (score <= -5) return 0.95;
+  if (score <= -3) return 0.97;
+  if (score <= -1) return 0.99;
+  return 1.0;
+}
+
+/**
+ * Individual player form state based on last 3 match ratings.
+ * Returns 'hot', 'cold', or 'normal'.
+ */
+function getPlayerFormState(player) {
+  const ratings = player.recentRatings || [];
+  if (ratings.length < 2) return 'normal';
+  const avg = ratings.reduce((s, v) => s + v, 0) / ratings.length;
+  if (avg >= 7.0) return 'hot';
+  if (avg <= 4.5) return 'cold';
+  return 'normal';
+}
+
+/**
+ * Match power multiplier from individual player form.
+ * Hot: +5%. Cold: -5%.
+ */
+function getPlayerFormMultiplier(player) {
+  const state = getPlayerFormState(player);
+  if (state === 'hot') return 1.05;
+  if (state === 'cold') return 0.95;
+  return 1.0;
+}
+
+/**
+ * After each matchday: update recentForm for each team and
+ * recentRatings for each player that played.
+ */
+function processMatchdayForm(matchResults) {
+  matchResults.forEach(({ match, result }) => {
+    [
+      { team: match.teamA, won: result.winner === match.teamA.name },
+      { team: match.teamB, won: result.winner === match.teamB.name }
+    ].forEach(({ team, won }) => {
+      if (!Array.isArray(team.recentForm)) team.recentForm = [];
+      team.recentForm.push(won ? 'W' : 'L');
+      if (team.recentForm.length > 5) team.recentForm = team.recentForm.slice(-5);
+
+      // Update individual player ratings from this match
+      const performances = (result.playerPerformances && result.playerPerformances[team.name]) || [];
+      performances.forEach(({ player, rating }) => {
+        if (!player || rating == null) return;
+        if (!Array.isArray(player.recentRatings)) player.recentRatings = [];
+        player.recentRatings.push(rating);
+        if (player.recentRatings.length > 3) player.recentRatings = player.recentRatings.slice(-3);
+      });
+    });
+  });
+}
+
+window.Nexus.initializeMomentum = initializeMomentum;
+window.Nexus.getTeamMomentumScore = getTeamMomentumScore;
+window.Nexus.getPlayerFormState = getPlayerFormState;
+window.Nexus.getTeamFormMultiplier = getTeamFormMultiplier;
+
+// -------------------------------------------------
+// MORALE SYSTEM
+// -------------------------------------------------
+
+const MORALE_LABELS = [
+  { min: 90, label: 'Thriving',  cssClass: 'morale--thriving'  },
+  { min: 75, label: 'Happy',     cssClass: 'morale--happy'     },
+  { min: 55, label: 'Neutral',   cssClass: 'morale--neutral'   },
+  { min: 35, label: 'Unsettled', cssClass: 'morale--unsettled' },
+  { min: 20, label: 'Unhappy',   cssClass: 'morale--unhappy'   },
+  { min: 0,  label: 'Miserable', cssClass: 'morale--miserable' }
+];
+
+function getMoraleInfo(morale) {
+  const m = morale != null ? morale : 70;
+  return MORALE_LABELS.find(e => m >= e.min) || MORALE_LABELS[MORALE_LABELS.length - 1];
+}
+
+/** Match power multiplier from morale. */
+function getMoraleMatchMultiplier(morale) {
+  const m = morale != null ? morale : 70;
+  if (m >= 90) return 1.03;
+  if (m >= 75) return 1.01;
+  if (m >= 55) return 1.00;
+  if (m >= 35) return 0.98;
+  if (m >= 20) return 0.95;
+  return 0.92; // Miserable
+}
+
+/** Training growth multiplier from morale. */
+function getMoraleTrainingMultiplier(morale) {
+  const m = morale != null ? morale : 70;
+  if (m >= 75) return 1.05;
+  if (m >= 55) return 1.00;
+  if (m >= 35) return 0.95;
+  return 0.85;
+}
+
+/** Extra injury risk from low morale (additive %). */
+function getMoraleInjuryRisk(morale) {
+  const m = morale != null ? morale : 70;
+  if (m < 20) return 0.04;
+  if (m < 35) return 0.02;
+  return 0;
+}
+
+/** Rough market salary for a player (used for morale salary comparison). */
+function getMarketSalaryForPlayer(player) {
+  const overall = getPlayerOverall(player);
+  if (overall >= 80) return 20000;
+  if (overall >= 70) return 11500;
+  if (overall >= 60) return 6000;
+  return 3000;
+}
+
+/**
+ * How much psychology support reduces negative morale changes.
+ * psychologySupport ranges 50-95. Returns 0.0 – 0.60 reduction factor.
+ */
+function getPsychMoraleReduction(environment) {
+  const support = (environment && environment.psychologySupport != null) ? environment.psychologySupport : 50;
+  return Math.max(0, (support - 50) / 75); // 0 at lvl1, ~0.20 lvl2, ~0.40 lvl3, ~0.60 lvl4
+}
+
+/**
+ * Process morale for all players on all teams after a matchday.
+ * Returns array of { player, team, event } for UI notifications.
+ */
+function processMatchdayMorale(matchResults, allTeams, environmentMap) {
+  const events = []; // morale threshold crossings to notify
+
+  // Build set of player ids that played this matchday, and their match result
+  const playedMap = new Map(); // playerId -> { won, team }
+  matchResults.forEach(({ match, result }) => {
+    [
+      { team: match.teamA, won: result.winner === match.teamA.name },
+      { team: match.teamB, won: result.winner === match.teamB.name }
+    ].forEach(({ team, won }) => {
+      const performances = (result.playerPerformances && result.playerPerformances[team.name]) || [];
+      performances.forEach(({ player }) => {
+        if (player) playedMap.set(player.id, { won, team });
+      });
+    });
+  });
+
+  allTeams.forEach(team => {
+    const env = (environmentMap && environmentMap[team.name]) || {};
+    const psychReduction = getPsychMoraleReduction(env);
+    const prestige = team.prestige != null ? team.prestige : 50;
+    const momentumScore = getTeamMomentumScore(team);
+
+    // Last match result for this team (for bench/reserve players)
+    const lastResult = (team.recentForm || []).slice(-1)[0]; // 'W' or 'L' or undefined
+
+    (team.players || []).forEach(player => {
+      const prevMorale = player.morale != null ? player.morale : 70;
+      let delta = 0;
+
+      const played = playedMap.has(player.id);
+      const info = played ? playedMap.get(player.id) : null;
+
+      if (played) {
+        // Player was in the starting lineup
+        if (info.won) {
+          delta += 3;
+          // Win streak bonus
+          const form = team.recentForm || [];
+          const streak = [...form].reverse().findIndex(r => r !== 'W');
+          const winStreak = streak === -1 ? form.length : streak;
+          if (winStreak >= 3) delta += 2;
+        } else {
+          delta -= 2;
+          const form = team.recentForm || [];
+          const streak = [...form].reverse().findIndex(r => r !== 'L');
+          const lossStreak = streak === -1 ? form.length : streak;
+          if (lossStreak >= 3) delta -= 2;
+        }
+      } else {
+        // On bench/reserves — frustration at not playing
+        if (lastResult === 'W') delta -= 1;
+        else if (lastResult === 'L') delta -= 1;
+      }
+
+      // Salary vs market value
+      const market = getMarketSalaryForPlayer(player);
+      const sal = player.salary || 5000;
+      if (sal >= market * 1.15) delta += 1;
+      else if (sal < market * 0.85) delta -= 1;
+
+      // Injury
+      const inj = getPlayerInjury(player);
+      if (inj) delta -= 2;
+
+      // Final year contract anxiety
+      if ((player.contractYears != null ? player.contractYears : 1) <= 1) delta -= 1;
+
+      // Team prestige effect
+      if (prestige < 40) delta -= 1;
+      else if (prestige > 75) delta += 0.5;
+
+      // Facilities
+      if (env.infrastructure >= 80) delta += 0.5;
+
+      // Team on bad momentum
+      if (momentumScore <= -3) delta -= 1;
+
+      // Psychology support reduces negative changes
+      if (delta < 0) delta *= (1 - psychReduction);
+
+      // Natural decay toward 60 (very gentle)
+      if (prevMorale > 60) delta -= 0.3;
+      else if (prevMorale < 60) delta += 0.3;
+
+      const newMorale = Math.max(0, Math.min(100, prevMorale + delta));
+      player.morale = newMorale;
+
+      // Detect threshold crossings (for notifications on user team)
+      const prevLabel = getMoraleInfo(prevMorale).label;
+      const newLabel  = getMoraleInfo(newMorale).label;
+      if (prevLabel !== newLabel) {
+        const dropped = (newLabel === 'Unhappy' || newLabel === 'Miserable');
+        const improved = (newLabel === 'Happy' || newLabel === 'Thriving');
+        if (dropped || improved) {
+          events.push({ player, team, newLabel, dropped });
+        }
+      }
+
+      // Morale-driven transfer request
+      if (newMorale < 35 && !player.transferListed) {
+        player.transferListed = true;
+        events.push({ player, team, transferRequest: true, newLabel });
+      }
+    });
+  });
+
+  return events;
+}
+
+window.Nexus.getMoraleInfo = getMoraleInfo;
+window.Nexus.getMoraleMatchMultiplier = getMoraleMatchMultiplier;
+window.Nexus.getMarketSalaryForPlayer = getMarketSalaryForPlayer;
+window.Nexus.getMoraleInjuryRisk = getMoraleInjuryRisk;
+
+// =====================================================================
+// INBOX SYSTEM — Persistent Mails + Player Chat Threads
+// =====================================================================
+
+const CHAT_SCENARIOS = {
+  transfer_request: {
+    icon: '😤',
+    getOpening: function() {
+      return '"I\'ve been thinking about this a lot. I\'m not happy here and I think it\'s time for me to move on."';
+    },
+    options: [
+      { label: "We\'ll find you a suitable club", moraleDelta: 5, transferList: true, managerReply: 'I appreciate your honesty. I\'ll make sure we find you the right opportunity.', resolved: true },
+      { label: "You\'re vital to us — please reconsider", moraleDelta: 8, managerReply: 'I hear you. Let\'s talk about what would make you stay.', next: 'transfer_request_stay' },
+      { label: 'You signed a contract, honour it', moraleDelta: -12, managerReply: 'This isn\'t the right time for this conversation. Focus on the team.', resolved: true }
+    ]
+  },
+  transfer_request_stay: {
+    icon: '😤',
+    getOpening: function() {
+      return '"I\'ll give it more time. But I need to see changes — a better contract, a bigger role. Something."';
+    },
+    options: [
+      { label: "We\'ll offer a new contract soon", moraleDelta: 5, managerReply: 'You have my word. We\'ll sit down and sort something out.', resolved: true },
+      { label: 'Your performances will decide your future', moraleDelta: 0, managerReply: 'Show us what you can do and we\'ll take care of the rest.', resolved: true }
+    ]
+  },
+  contract_expiring: {
+    icon: '📋',
+    getOpening: function() {
+      return '"My contract is running out at the end of this season. I\'d like to know where I stand."';
+    },
+    options: [
+      { label: "We want to keep you — let\'s negotiate", moraleDelta: 6, managerReply: 'Absolutely. Come speak to me and we\'ll work out a deal.', resolved: true },
+      { label: "We\'re still evaluating our options", moraleDelta: -5, managerReply: 'I\'ll get back to you before the end of the season.', resolved: true },
+      { label: "We\'ll let your contract run out", moraleDelta: -15, transferList: true, managerReply: 'I respect everything you\'ve done, but we\'re going in a different direction.', resolved: true }
+    ]
+  },
+  major_injury: {
+    icon: '🏥',
+    getOpening: function(name, extra) {
+      return '"' + (extra || 'This injury') + ' has really knocked me. How long am I actually going to be out for?"';
+    },
+    options: [
+      { label: "We\'re sending you to the clinic immediately", moraleDelta: 10, clinic: true, managerReply: 'Your health comes first. We\'ll get you the best treatment available.', resolved: true },
+      { label: 'Take all the time you need to recover', moraleDelta: 5, managerReply: 'Don\'t rush back. We need you at 100% when you return.', resolved: true },
+      { label: 'We need you back as soon as possible', moraleDelta: -8, managerReply: 'I know it\'s hard, but the team needs you.', resolved: true }
+    ]
+  },
+  hot_streak: {
+    icon: '🔥',
+    getOpening: function() {
+      return '"I\'ve been on fire lately and I think I\'m performing at a level that deserves more recognition."';
+    },
+    options: [
+      { label: "You\'re our standout player right now", moraleDelta: 10, managerReply: 'Keep it up. Everyone in the team sees what you\'re doing.', resolved: true },
+      { label: 'Great form — keep building on it', moraleDelta: 5, managerReply: 'You\'re doing well. Stay focused and keep improving.', resolved: true },
+      { label: "Don\'t let it go to your head", moraleDelta: -3, managerReply: 'It\'s a team game. Stay grounded.', resolved: true }
+    ]
+  },
+  youth_promoted: {
+    icon: '🌟',
+    getOpening: function() {
+      return '"I\'m so excited to join the main roster! I won\'t let you down — I\'ll work hard and prove myself."';
+    },
+    options: [
+      { label: 'Welcome to the team', moraleDelta: 8, managerReply: 'You earned it. Make the most of it.', resolved: true },
+      { label: 'Work hard and earn your spot', moraleDelta: 5, managerReply: 'Keep your head down and show us what you can do.', resolved: true },
+      { label: "Show us what you've got", moraleDelta: 6, managerReply: 'We\'re counting on you. Don\'t hold back.', resolved: true }
+    ]
+  },
+  new_signing: {
+    icon: '🤝',
+    getOpening: function() {
+      return '"Thanks for the opportunity. I\'m ready to prove myself and contribute to the team."';
+    },
+    options: [
+      { label: 'Welcome aboard', moraleDelta: 8, managerReply: 'Glad to have you. Let\'s get to work.', resolved: true },
+      { label: 'We expect big things', moraleDelta: 6, managerReply: 'We brought you here for a reason. Show it.', resolved: true },
+      { label: 'Fit in and work hard', moraleDelta: 5, managerReply: 'Integrate with the group and give 100%.', resolved: true }
+    ]
+  },
+  return_from_injury: {
+    icon: '💪',
+    getOpening: function() {
+      return '"I\'m back and ready to play. Thanks for the support during the recovery."';
+    },
+    options: [
+      { label: 'Good to have you back', moraleDelta: 8, managerReply: 'We missed you. Ease in and stay sharp.', resolved: true },
+      { label: 'Ease back in', moraleDelta: 5, managerReply: 'Don\'t rush. We need you at 100%.', resolved: true },
+      { label: 'We need you at 100%', moraleDelta: 3, managerReply: 'Get up to speed quickly. The team needs you.', resolved: true }
+    ]
+  },
+  signed_to_academy: {
+    icon: '📚',
+    getOpening: function() {
+      return '"I\'m really grateful for the chance to develop here. I\'ll give it my all."';
+    },
+    options: [
+      { label: 'Welcome to the academy', moraleDelta: 6, managerReply: 'Focus on growth. We\'re watching.', resolved: true },
+      { label: 'Work hard and you\'ll go far', moraleDelta: 5, managerReply: 'Develop your game. The path is there.', resolved: true }
+    ]
+  },
+  transfer_listed: {
+    icon: '📋',
+    getOpening: function() {
+      return '"I\'ve been put on the transfer list. I understand the decision — but I want to know where I stand."';
+    },
+    options: [
+      { label: "We'll find you the right move", moraleDelta: 5, managerReply: 'We\'ll do our best to find a good fit for you.', resolved: true },
+      { label: 'Your performances will decide', moraleDelta: 0, managerReply: 'If you play well, we might take you off. Ball is in your court.', resolved: true },
+      { label: 'You can play your way back', moraleDelta: 3, managerReply: 'Nothing is set in stone. Prove us wrong.', resolved: true }
+    ]
+  },
+  youth_released: {
+    icon: '😔',
+    getOpening: function() {
+      return '"I\'m disappointed but I understand. Thank you for the opportunity you gave me."';
+    },
+    options: [
+      { label: 'We wish you the best', moraleDelta: 2, managerReply: 'Keep working. You\'ll find your place somewhere.', resolved: true },
+      { label: 'Keep working and you\'ll find a place', moraleDelta: 0, managerReply: 'Don\'t give up. Another door will open.', resolved: true }
+    ]
+  },
+  trophy_or_playoffs: {
+    icon: '🏆',
+    getOpening: function() {
+      return '"We did it! I\'m so proud of this team. Everyone stepped up when it mattered."';
+    },
+    options: [
+      { label: 'Everyone played their part', moraleDelta: 8, managerReply: 'That\'s what we needed. More of the same.', resolved: true },
+      { label: 'Now let\'s push for more', moraleDelta: 6, managerReply: 'One step at a time. Next target is ahead.', resolved: true }
+    ]
+  },
+  relegation_survived: {
+    icon: '😤',
+    getOpening: function() {
+      return '"That was way too close. We need to be better next season — no more scraping by."';
+    },
+    options: [
+      { label: 'We\'ll be better next time', moraleDelta: 5, managerReply: 'We learn from this. Next season we improve.', resolved: true },
+      { label: 'Use this as motivation', moraleDelta: 6, managerReply: 'Channel that feeling. Don\'t let it happen again.', resolved: true }
+    ]
+  },
+  morale_improved: {
+    icon: '🙂',
+    getOpening: function() {
+      return '"I\'ve been in a better headspace lately. Ready to contribute and help the team."';
+    },
+    options: [
+      { label: 'Good to hear', moraleDelta: 5, managerReply: 'Keep it up. We need you focused.', resolved: true },
+      { label: 'That\'s what we need', moraleDelta: 6, managerReply: 'Channel that into your performances.', resolved: true }
+    ]
+  }
+};
+
+let _inboxMailIdCounter = 1;
+
+function initInbox(season) {
+  season.inbox = { mails: [], chats: [] };
+}
+
+function addMail(season, opts) {
+  if (!season || !season.inbox) return;
+  const mail = {
+    id: 'mail_' + (_inboxMailIdCounter++),
+    type: opts.type || 'info',
+    icon: opts.icon || '📬',
+    title: opts.title || '',
+    body: opts.body || '',
+    matchday: opts.matchday != null ? opts.matchday : (season.currentMatchday || 0),
+    read: false,
+    actionRoute: opts.actionRoute || null,
+    actionLabel: opts.actionLabel || null
+  };
+  if (opts.offers && Array.isArray(opts.offers)) mail.offers = opts.offers;
+  if (opts.actionTab) mail.actionTab = opts.actionTab;
+  season.inbox.mails.unshift(mail);
+}
+
+function triggerPlayerChat(season, player, scenarioKey, extraText) {
+  if (!season || !season.inbox || !player) return;
+  const scenario = CHAT_SCENARIOS[scenarioKey];
+  if (!scenario) return;
+  const existing = season.inbox.chats.find(function(c) {
+    return c.playerId === player.id && c.scenario === scenarioKey && !c.resolved;
+  });
+  if (existing) return;
+  const name = getPlayerDisplayName(player);
+  season.inbox.chats.unshift({
+    playerId: player.id,
+    playerName: name,
+    scenario: scenarioKey,
+    icon: scenario.icon || '💬',
+    resolved: false,
+    unread: true,
+    messages: [{ from: 'player', text: scenario.getOpening(name, extraText), options: scenario.options.slice(), matchday: season.currentMatchday || 0 }]
+  });
+}
+
+function applyChatOption(season, playerId, optionIndex) {
+  if (!season || !season.inbox) return null;
+  const thread = season.inbox.chats.find(function(c) { return c.playerId === playerId && !c.resolved; });
+  if (!thread) return null;
+  const lastMsg = thread.messages[thread.messages.length - 1];
+  if (!lastMsg || lastMsg.from !== 'player' || !lastMsg.options) return null;
+  const option = lastMsg.options[optionIndex];
+  if (!option) return null;
+  lastMsg.options = null;
+  thread.messages.push({ from: 'manager', text: '"' + option.managerReply + '"', matchday: season.currentMatchday || 0 });
+  const userTeam = window.Nexus && window.Nexus.LEAGUE && window.Nexus.LEAGUE[0];
+  const player = userTeam && (userTeam.players || []).find(function(p) { return p.id === playerId; });
+  if (player) {
+    if (option.moraleDelta) player.morale = Math.max(0, Math.min(100, (player.morale || 70) + option.moraleDelta));
+    if (option.transferList) player.transferListed = true;
+    if (option.clinic && player.injury && window.Nexus.applyClinicVisit && userTeam && userTeam.finance) {
+      const cost = (window.Nexus.INJURY_CLINIC_COST || {})[player.injury.severity] || 35000;
+      if ((userTeam.finance.capital || 0) >= cost) window.Nexus.applyClinicVisit(userTeam, player);
+    }
+  }
+  if (option.next) {
+    const nextScenario = CHAT_SCENARIOS[option.next];
+    if (nextScenario) {
+      const nm = player ? getPlayerDisplayName(player) : thread.playerName;
+      thread.messages.push({ from: 'player', text: nextScenario.getOpening(nm), options: nextScenario.options.slice(), matchday: season.currentMatchday || 0 });
+      thread.unread = true;
+      return 'followup';
+    }
+  }
+  if (option.resolved) thread.resolved = true;
+  return 'resolved';
+}
+
+function checkContractExpiryChats(season, userTeam) {
+  if (!season || !userTeam) return;
+  (userTeam.players || []).forEach(function(player) {
+    if ((player.contractYears != null ? player.contractYears : 1) === 1) {
+      triggerPlayerChat(season, player, 'contract_expiring');
+    }
+  });
 }
 
 // PART 4 — UPDATE STANDINGS (unchanged logic)
@@ -2508,6 +3584,26 @@ function updateStandings(standings, result, match) {
 function getSortedStandings(standings) {
   return Object.values(standings)
     .sort((a, b) => b.points - a.points || b.wins - a.wins);
+}
+
+function getMainPlayoffOutcome(seasonData, teamName, regularPosition, usingChallengerStandings) {
+  if (!teamName || usingChallengerStandings) return 'Championship Playoffs: Did not qualify';
+  const qualified = regularPosition != null && regularPosition <= 6;
+  if (!qualified) return 'Championship Playoffs: Did not qualify';
+
+  const finalists = (seasonData && seasonData.playoffsBracket && Array.isArray(seasonData.playoffsBracket.finalists))
+    ? seasonData.playoffsBracket.finalists
+      .map(function(t) { return typeof t === 'string' ? t : (t && t.name); })
+      .filter(Boolean)
+    : [];
+
+  if (finalists.length >= 2) {
+    return finalists.indexOf(teamName) >= 0
+      ? 'Championship Playoffs: Eliminated in final'
+      : 'Championship Playoffs: Eliminated in semi finals';
+  }
+
+  return 'Championship Playoffs: Eliminated';
 }
 
 // Expose Step 7
@@ -2569,6 +3665,33 @@ function createChallengerSeasonFromTeams(teams) {
   };
 }
 
+// PART 1b — INTERNATIONAL TEAM HELPER
+
+function createInternationalTeam(region, teamName, avgStat) {
+  const team = createTeam(teamName, 'Main');
+  team.region = region;
+  team.isInternational = true;
+
+  // Calibrate player stats relative to league top-4 average
+  if (avgStat != null) {
+    const isElite = region === 'EU' || region === 'APAC';
+    team.players.forEach(function(player) {
+      STAT_KEYS.forEach(function(k) {
+        // Regional band: EU/APAC +5→+10 above avg, LATAM/SA -5→-10 below avg
+        const regionOffset = isElite ? randomInt(5, 10) : -randomInt(5, 10);
+        // Per-stat random variance: ±6 to keep players feeling individual
+        const variance = Math.round((Math.random() - 0.5) * 12);
+        const newCurrent = Math.max(38, Math.min(96, Math.round(avgStat + regionOffset + variance)));
+        player.stats[k].current = newCurrent;
+        player.stats[k].minCap = Math.max(30, newCurrent - randomInt(5, 12));
+        player.stats[k].maxCap = Math.min(99, newCurrent + randomInt(5, 15));
+      });
+    });
+  }
+
+  return team;
+}
+
 // PART 2 — TRANSITION TO SPLIT (Top 6 playoffs, Bottom 2 vs Challenger Top 2)
 
 function transitionToSplit(season, environmentMap, meta) {
@@ -2608,10 +3731,23 @@ function createPlayoffBracket(topTeams) {
 
 function playPlayoffRound(season, environmentMap, meta) {
   const bracket = season.playoffsBracket;
+  const userTeam = (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
   const winners = [];
   const roundResults = [];
 
   bracket.matches.forEach(match => {
+    if (window.Nexus.shouldAIActivateBootcamp) {
+      const involvesUser = userTeam && (
+        match.teamA === userTeam ||
+        match.teamB === userTeam ||
+        (match.teamA && match.teamA.name === userTeam.name) ||
+        (match.teamB && match.teamB.name === userTeam.name)
+      );
+      if (!involvesUser) {
+        window.Nexus.shouldAIActivateBootcamp(match.teamA, match.teamB);
+        window.Nexus.shouldAIActivateBootcamp(match.teamB, match.teamA);
+      }
+    }
     const result = simulateMatch({
       teamA: match.teamA,
       teamB: match.teamB,
@@ -2659,6 +3795,122 @@ function playPlayoffRound(season, environmentMap, meta) {
   return { finished: false, roundResults };
 }
 
+// PART 3b — MID-SEASON INVITATIONAL (Top 4 league + 4 international teams, single elim QF→SF→Final)
+
+function createInvitationalBracket(top4, intlTeams) {
+  return {
+    round: 1, // 1=QF, 2=SF, 3=Final
+    matches: [
+      { teamA: top4[0], teamB: intlTeams[3] },
+      { teamA: top4[1], teamB: intlTeams[2] },
+      { teamA: top4[2], teamB: intlTeams[1] },
+      { teamA: top4[3], teamB: intlTeams[0] }
+    ]
+  };
+}
+
+function transitionToInvitational(season) {
+  const sorted = getSortedStandings(season.standings);
+  const top4 = sorted.slice(0, 4).map(t => season.teams.find(team => team.name === t.teamName)).filter(Boolean);
+
+  // Compute average current stat across all players in top 4 teams
+  let statTotal = 0, statCount = 0;
+  top4.forEach(function(team) {
+    (team ? team.players : []).forEach(function(player) {
+      STAT_KEYS.forEach(function(k) {
+        if (player.stats && player.stats[k]) { statTotal += player.stats[k].current; statCount++; }
+      });
+    });
+  });
+  const avgStat = statCount > 0 ? statTotal / statCount : 68;
+
+  const usedNames = new Set(season.teams.map(t => t.name));
+  const regions = ['EU', 'APAC', 'LATAM', 'SA'];
+  const intlTeams = regions.map(function(region) {
+    const pool = INTERNATIONAL_TEAM_POOLS[region];
+    const available = pool.filter(function(n) { return !usedNames.has(n); });
+    const name = available.length ? available[randomInt(0, available.length - 1)] : (region + ' All-Stars');
+    return createInternationalTeam(region, name, avgStat);
+  });
+
+  season.phase = 'invitational';
+  season.invitationalTeams = top4.concat(intlTeams);
+  season.invitationalBracket = createInvitationalBracket(top4, intlTeams);
+}
+
+function playInvitationalRound(season, environmentMap, meta) {
+  const bracket = season.invitationalBracket;
+  const defaultEnv = { coachQuality: 60, infrastructure: 60, psychologySupport: 60, pressure: 50 };
+  const winners = [];
+  const roundResults = [];
+
+  bracket.matches.forEach(function(match) {
+    const result = simulateMatch({
+      teamA: match.teamA,
+      teamB: match.teamB,
+      environmentA: environmentMap[match.teamA.name] || defaultEnv,
+      environmentB: environmentMap[match.teamB.name] || defaultEnv,
+      meta
+    });
+    result.stage = 'invitational';
+
+    const allTeams = season.invitationalTeams || [];
+    const winnerTeam = allTeams.find(function(t) { return t.name === result.winner; })
+      || season.teams.find(function(t) { return t.name === result.winner; });
+    winners.push(winnerTeam);
+    roundResults.push({ match, result });
+  });
+
+  // QF → SF
+  if (bracket.round === 1) {
+    bracket.sfParticipants = winners.slice();
+    bracket.round = 2;
+    bracket.matches = [
+      { teamA: winners[0], teamB: winners[1] },
+      { teamA: winners[2], teamB: winners[3] }
+    ];
+    return { finished: false, roundResults, invitationalRound: 'QF' };
+  }
+
+  // SF → Final
+  if (bracket.round === 2) {
+    bracket.round = 3;
+    bracket.matches = [{ teamA: winners[0], teamB: winners[1] }];
+    return { finished: false, roundResults, invitationalRound: 'SF' };
+  }
+
+  // Final → done
+  if (bracket.round === 3) {
+    const champion = winners[0];
+    const runnerUp = bracket.matches[0].teamA === champion
+      ? bracket.matches[0].teamB
+      : bracket.matches[0].teamA;
+
+    const sfLosers = (bracket.sfParticipants || []).filter(function(t) {
+      return t && champion && t.name !== champion.name && runnerUp && t.name !== runnerUp.name;
+    });
+
+    const prizes = { champion: 300000, runnerUp: 150000, semifinalist: 50000 };
+    [{ team: champion, prize: prizes.champion }, { team: runnerUp, prize: prizes.runnerUp }]
+      .concat(sfLosers.map(function(t) { return { team: t, prize: prizes.semifinalist }; }))
+      .forEach(function(entry) {
+        if (entry.team && entry.team.finance) {
+          entry.team.finance.capital += entry.prize;
+          entry.team.finance.revenueThisSeason = (entry.team.finance.revenueThisSeason || 0) + entry.prize;
+        }
+      });
+
+    if (champion) champion.prestige = (champion.prestige || 50) + 15;
+
+    season.invitationalChampion = champion;
+    season.invitationalPlayed = true;
+    season.phase = 'regular'; // resume regular season from MD6
+    return { finished: false, roundResults, invitationalRound: 'Final', invitationalChampion: champion, invitationalRunnerUp: runnerUp };
+  }
+
+  return { finished: false, roundResults };
+}
+
 // PART 4 — RELEGATION TOURNAMENT (Bottom 2 Main vs Top 2 Challenger)
 
 function resolveRelegationTournament({
@@ -2667,6 +3919,7 @@ function resolveRelegationTournament({
   environmentMap,
   meta
 }) {
+  const userTeam = (window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]) || null;
   const results = [];
   const matchResults = [];
   const safeMain = Array.isArray(mainTeams) ? mainTeams : [];
@@ -2677,6 +3930,18 @@ function resolveRelegationTournament({
     const challenger = safeChallenger[i];
     if (!main || !challenger || !main.name || !challenger.name) continue;
 
+    if (window.Nexus.shouldAIActivateBootcamp) {
+      const involvesUser = userTeam && (
+        main === userTeam ||
+        challenger === userTeam ||
+        main.name === userTeam.name ||
+        challenger.name === userTeam.name
+      );
+      if (!involvesUser) {
+        window.Nexus.shouldAIActivateBootcamp(main, challenger);
+        window.Nexus.shouldAIActivateBootcamp(challenger, main);
+      }
+    }
     const matchResult = simulateMatch({
       teamA: main,
       teamB: challenger,
@@ -2752,7 +4017,17 @@ function playNextStage(season, environmentMap, meta) {
       return { finished: false, phase: 'playoffs', matchdayResults: result.matchdayResults, newMeta: result.newMeta };
     }
 
+    // Trigger Mid-Season Invitational after matchday 5
+    if (season.currentMatchday === 5 && !season.invitationalPlayed) {
+      transitionToInvitational(season);
+      return { ...result, phase: 'invitational' };
+    }
+
     return { ...result, phase: 'regular' };
+  }
+
+  if (season.phase === 'invitational') {
+    return playInvitationalRound(season, environmentMap, meta);
   }
 
   if (season.phase === 'playoffs') {
@@ -2780,6 +4055,7 @@ window.Nexus.createSeasonWithSplit = createSeasonWithSplit;
 window.Nexus.createChallengerSeasonFromTeams = createChallengerSeasonFromTeams;
 window.Nexus.playNextStage = playNextStage;
 window.Nexus.transitionToSplit = transitionToSplit;
+window.Nexus.transitionToInvitational = transitionToInvitational;
 window.Nexus.resolveRelegationTournament = resolveRelegationTournament;
 
 // -------------------------------------------------
@@ -2956,7 +4232,12 @@ function generateTransferMarket(allTeams, userTeamName, skipPlayerIds) {
       const age = p.age != null ? p.age : 22;
       const salary = p.salary || 5000;
       const monthlyCost = (team.finance && team.finance.monthlyCost) || 180000;
-      if (age >= 27 && chance(0.4)) {
+      const morale = p.morale != null ? p.morale : 70;
+      // Unhappy/Miserable starters request transfer regardless of age/salary
+      if (morale < 35 && chance(0.75)) {
+        p.transferListed = true;
+        listings.push({ player: p, team, askingPrice: Math.round(calculatePlayerValue(p) * 1.1), listedSince: 0 });
+      } else if (age >= 27 && chance(0.4)) {
         p.transferListed = true;
         listings.push({ player: p, team, askingPrice: Math.round(calculatePlayerValue(p) * 1.2), listedSince: 0 });
       } else if (salary > monthlyCost * 0.15 && chance(0.3)) {
@@ -3470,20 +4751,49 @@ function decrementContracts(teams) {
 }
 
 function offerContractRenewal(player, yearsOffered, salaryOffered) {
+  const morale = player.morale != null ? player.morale : 70;
+
+  // Miserable players may flat-out refuse regardless of offer
+  if (morale < 20 && Math.random() < 0.50) {
+    return { accepted: false, reason: 'Player wants to leave the team.' };
+  }
+
+  // Morale shifts the salary threshold the player will accept.
+  // Unhappy/Miserable demand a significant premium; Happy/Thriving are more flexible.
+  let moraleMultiplier;
+  if (morale < 20)      moraleMultiplier = 1.50; // Miserable: wants 50% more
+  else if (morale < 35) moraleMultiplier = 1.30; // Unhappy: wants 30% more
+  else if (morale < 55) moraleMultiplier = 1.15; // Unsettled: wants 15% more
+  else if (morale > 80) moraleMultiplier = 0.95; // Happy/Thriving: slight discount
+  else                  moraleMultiplier = 1.00; // Neutral: no change
+
   const current = player.salary || 5000;
+  const demandedSalary = current * moraleMultiplier;
+
   let chanceVal = 0.6;
-  if (salaryOffered >= current * 1.1) chanceVal += 0.2;
-  else if (salaryOffered < current) chanceVal -= 0.3;
+  if (salaryOffered >= demandedSalary * 1.1) chanceVal += 0.2;
+  else if (salaryOffered >= demandedSalary)   chanceVal += 0.05;
+  else if (salaryOffered < demandedSalary * 0.85) chanceVal -= 0.35;
+  else if (salaryOffered < current)           chanceVal -= 0.15;
+
   const age = player.age != null ? player.age : 22;
   if (age >= 27) chanceVal += 0.15;
-  if (age < 22) chanceVal += 0.1;
+  if (age < 22)  chanceVal += 0.1;
+
   const accepted = Math.random() < Math.max(0, Math.min(1, chanceVal));
   if (accepted) {
     player.contractYears = yearsOffered;
     player.salary = salaryOffered;
+    // Contract renewal boosts morale
+    player.morale = Math.min(100, (player.morale || 70) + 8);
     return { accepted: true };
   }
-  return { accepted: false, reason: 'wants higher salary' };
+
+  // Give a hint about what the player actually wants
+  const hint = morale < 35
+    ? 'Player is unhappy — demands significantly higher salary ($' + Math.round(demandedSalary).toLocaleString() + '/mo or more).'
+    : 'Player wants higher salary (min ~$' + Math.round(demandedSalary).toLocaleString() + '/mo).';
+  return { accepted: false, reason: hint };
 }
 
 window.Nexus.generateJobOffers = generateJobOffers;
@@ -3564,6 +4874,13 @@ function isAnyTeamBankrupt(season) {
 const _originalPlayNextStage = window.Nexus.playNextStage;
 window.Nexus.playNextStage = function(season, environmentMap, meta) {
   const result = _originalPlayNextStage(season, environmentMap, meta);
+  const hadStageMatches = !!(
+    result && (
+      (result.matchdayResults && result.matchdayResults.length > 0) ||
+      (result.roundResults && result.roundResults.length > 0) ||
+      (result.relegationMatchResults && result.relegationMatchResults.length > 0)
+    )
+  );
   if (result && result.finished && season.phase === 'finished' && isAnyTeamBankrupt(season)) {
     result.bankrupt = true;
     season.bankrupt = true;
@@ -3668,6 +4985,13 @@ window.Nexus.playNextStage = function(season, environmentMap, meta) {
       });
     });
   }
+  if (hadStageMatches && window.Nexus.tickBootcampDuration) {
+    const allTeamsForTick = [
+      ...(window.Nexus.LEAGUE || []),
+      ...(window.Nexus.CHALLENGER_LEAGUE || [])
+    ].filter(Boolean);
+    window.Nexus.tickBootcampDuration(Array.from(new Set(allTeamsForTick)));
+  }
   if (result.finished && season.phase === 'finished') {
     if (window.Nexus.applyPlacementBonus) window.Nexus.applyPlacementBonus(season);
     if (window.Nexus.applyPrestigeChanges) window.Nexus.applyPrestigeChanges(season, environmentMap);
@@ -3764,6 +5088,9 @@ function buildSeasonSnapshot(season) {
   } else snap.playoffsBracket = null;
   snap.relegationCandidates = (season.relegationCandidates || []).map(t => t.name);
   snap.challengerPromotion = (season.challengerPromotion || []).map(t => t.name);
+  if (season.inbox && (season.inbox.mails || season.inbox.chats)) {
+    snap.inbox = { mails: season.inbox.mails || [], chats: season.inbox.chats || [] };
+  }
   return snap;
 }
 
@@ -3826,7 +5153,10 @@ function restoreSeasonFromSnapshot(snap, mainTeams, challengerLeague) {
         ? snap.matchDecisionState.resolvedFixtures
         : {},
       pending: (snap.matchDecisionState && snap.matchDecisionState.pending) ? snap.matchDecisionState.pending : null
-    }
+    },
+    inbox: snap.inbox && (snap.inbox.mails || snap.inbox.chats)
+      ? { mails: snap.inbox.mails || [], chats: snap.inbox.chats || [] }
+      : { mails: [], chats: [] }
   };
   return season;
 }
@@ -3889,7 +5219,8 @@ function initUI() {
     youth: 'Youth Academy',
     season: 'Season',
     career: 'Career',
-    operations: 'Operations'
+    operations: 'Operations',
+    inbox: 'Inbox'
   };
 
   const pageSubtitles = {
@@ -3900,7 +5231,8 @@ function initUI() {
     youth: 'Academy slots & youth market',
     season: 'League standings & schedule',
     career: 'Season summary & playoff outcome',
-    operations: 'Organization management'
+    operations: 'Organization management',
+    inbox: 'Mails & player conversations'
   };
 
   routeButtons.forEach(btn => {
@@ -3938,6 +5270,8 @@ function initUI() {
       if (route === 'youth' && typeof updateYouthAcademyUI === 'function') updateYouthAcademyUI(userTeamRef());
       if (route === 'development' && typeof updateDevelopmentUI === 'function') updateDevelopmentUI();
       if (route === 'operations' && typeof updateOperationsUI === 'function') updateOperationsUI();
+      if (route === 'overview' && typeof updateFixtureUI === 'function') updateFixtureUI(season);
+      if (route === 'inbox' && typeof updateInboxUI === 'function') updateInboxUI();
     });
   });
 
@@ -3954,6 +5288,7 @@ function initUI() {
   let pendingSeasonEnd = null;
   let pendingAfterMatchResult = null;
   let currentJobOffers = [];
+  let pendingAcceptedOfferTeamName = null;
   let openMarketPlayerModalRef = null;
   let openOtherTeamRosterModalRef = null;
   let pendingBankruptcy = false;
@@ -3997,6 +5332,8 @@ function initUI() {
       [league, challengerLeague].forEach(teams => {
         (teams || []).forEach(team => {
           team.youthAcademy = team.youthAcademy || [];
+          if (team.activeBootcamp === undefined) team.activeBootcamp = null;
+          if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') team.bootcampUsageThisSeason = {};
           (team.youthAcademy || []).forEach(function(p) {
             if (Nexus.ensureYouthProspectRoleBias) Nexus.ensureYouthProspectRoleBias(p);
           });
@@ -4066,8 +5403,10 @@ function initUI() {
             var relLoad2 = (season.relegationResults || []).find(function(r) { return r.challengerTeam === userTeamForEnd.name; });
             outcomeLoad = relLoad2 ? (relLoad2.winner === userTeamForEnd.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
           } else if (userTeamForEnd.tier === 'Challenger') {
-            outcomeLoad = 'Challenger: ' + (positionLoad === 1 ? '1st' : positionLoad === 2 ? '2nd' : positionLoad === 3 ? '3rd' : (positionLoad + 'th'));
-          } else outcomeLoad = 'Championship Playoffs: Eliminated';
+            outcomeLoad = 'Challenger Championship: Did not qualify';
+          } else {
+            outcomeLoad = getMainPlayoffOutcome(season, userTeamForEnd.name, positionLoad, useChallengerForPositionLoad);
+          }
           var currentMainTeamsLoad = [...league, ...(challengerLeague || [])].filter(function(t) { return t.tier === 'Main'; });
           if (currentMainTeamsLoad.length === 12) {
             pendingSeasonEnd = { season: season, result: { finished: true }, position: positionLoad, rec: recLoad, outcome: outcomeLoad };
@@ -4105,6 +5444,8 @@ function initUI() {
         if (team.coachTierLevel == null) team.coachTierLevel = 1;
         if (team.facilityTierLevel == null) team.facilityTierLevel = 1;
         if (team.psychologyLevel == null) team.psychologyLevel = 1;
+        if (team.activeBootcamp === undefined) team.activeBootcamp = null;
+        if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') team.bootcampUsageThisSeason = {};
         if (Nexus.syncTeamEnvironmentFromTiers) Nexus.syncTeamEnvironmentFromTiers(team, environmentMap);
       });
     });
@@ -4163,11 +5504,15 @@ function initUI() {
       userTeamObj.activeTeamTraining = (userTeamObj.activeTeamTraining && teamTrainingKeys.includes(userTeamObj.activeTeamTraining))
         ? userTeamObj.activeTeamTraining : teamTrainingKeys[0];
       allTeamsForTraining.forEach(team => {
+        if (team.activeBootcamp === undefined) team.activeBootcamp = null;
+        if (!team.bootcampUsageThisSeason || typeof team.bootcampUsageThisSeason !== 'object') team.bootcampUsageThisSeason = {};
         if (team === userTeamObj) return;
         team.activeTeamTraining = teamTrainingKeys[Math.floor(Math.random() * teamTrainingKeys.length)];
       });
     }
     if (Nexus.initializeMomentum) Nexus.initializeMomentum(season);
+    initInbox(season);
+    checkContractExpiryChats(season, league[0]);
     if (Nexus.refreshTransferMarket) Nexus.refreshTransferMarket(season, [...league, ...(challengerLeague || [])], league[0].name);
     window.Nexus.YOUTH_MARKET = (Nexus.generateYouthMarket && Nexus.generateYouthMarket()) || [];
     setupContractOfferModal();
@@ -4252,6 +5597,10 @@ function initUI() {
     const data = pendingSeasonEnd;
     if (!data) return;
     pendingSeasonEnd = null;
+    const jobOffersSnapshot = (currentJobOffers && currentJobOffers.length)
+      ? currentJobOffers.map(function(o) { return { teamName: o.team && o.team.name, salary: o.salary, reason: o.reason }; })
+      : null;
+    currentJobOffers = [];
     const { season: finishedSeason, result: finishResult, position, rec, outcome } = data;
     const prevChampion = finishedSeason.champion != null
       ? (typeof finishedSeason.champion === 'object' ? finishedSeason.champion.name : finishedSeason.champion)
@@ -4318,11 +5667,40 @@ function initUI() {
     if (Nexus.getRandomMetaPatch) Nexus.getRandomMetaPatch();
     meta = Nexus.getCurrentMeta ? Nexus.getCurrentMeta() : meta;
     const mapRotation = Nexus.rotateMapPool ? Nexus.rotateMapPool() : null;
+    if (Nexus.resetBootcampUsageForSeason) Nexus.resetBootcampUsageForSeason(allTeams);
     season = Nexus.createSeasonWithSplit(currentMainTeams);
     const currentChallengerTeams = allTeams.filter(t => t.tier === 'Challenger');
     challengerSeason = Nexus.createChallengerSeasonFromTeams && Nexus.createChallengerSeasonFromTeams(currentChallengerTeams);
     if (challengerSeason) window.Nexus.CHALLENGER_SEASON = challengerSeason;
     if (Nexus.initializeMomentum) Nexus.initializeMomentum(season);
+    initInbox(season);
+    if (jobOffersSnapshot && jobOffersSnapshot.length) {
+      addMail(season, {
+        type: 'career',
+        icon: '📋',
+        title: 'You have new job offers',
+        body: 'You have ' + jobOffersSnapshot.length + ' job offer(s) from other teams. Use the buttons below to view or accept an offer.',
+        offers: jobOffersSnapshot
+      });
+    }
+    if (pendingAcceptedOfferTeamName) {
+      addMail(season, {
+        type: 'career',
+        icon: '✅',
+        title: 'You are now manager of ' + pendingAcceptedOfferTeamName,
+        body: 'You accepted the offer and are now in charge of ' + pendingAcceptedOfferTeamName + '. Good luck this season.'
+      });
+      pendingAcceptedOfferTeamName = null;
+    }
+    const userTeamNew = league && league[0];
+    const budgetNext = userTeamNew && userTeamNew.finance && (userTeamNew.finance.capital != null) ? userTeamNew.finance.capital : 0;
+    addMail(season, {
+      type: 'result',
+      icon: '🏁',
+      title: 'Season finished',
+      body: 'Position: ' + position + '. ' + (outcome || '') + ' Budget for next season: $' + Number(budgetNext).toLocaleString() + '.'
+    });
+    checkContractExpiryChats(season, league && league[0]);
     if (Nexus.refreshTransferMarket) Nexus.refreshTransferMarket(season, allTeams, (league && league[0]) ? league[0].name : null);
     window.Nexus.YOUTH_MARKET = (Nexus.generateYouthMarket && Nexus.generateYouthMarket()) || [];
     let mapsText = '—';
@@ -4437,6 +5815,7 @@ function initUI() {
           window.Nexus.CHALLENGER_LEAGUE = challengerLeague;
           const jobModal = document.getElementById('jobOffersModal');
           if (jobModal) jobModal.style.display = 'none';
+          pendingAcceptedOfferTeamName = selectedOffer.team.name;
           showNotification('You are now manager of ' + selectedOffer.team.name + '!', 'success');
           currentJobOffers = [];
           continueSeasonTransition();
@@ -4493,7 +5872,25 @@ function initUI() {
       }
       currentJobOffers = offers;
       isBankruptcyJobOffers = true;
+      if (season && season.inbox && typeof addMail === 'function') {
+        addMail(season, {
+          type: 'career',
+          icon: '📋',
+          title: 'You have new job offers',
+          body: 'You have ' + offers.length + ' job offer(s). Use the buttons below to view or accept an offer.',
+          offers: offers.map(function(o) { return { teamName: o.team.name, salary: o.salary, reason: o.reason || '' }; })
+        });
+      }
       renderJobOffers(currentJobOffers, userTeam);
+      if (season && season.inbox && typeof addMail === 'function') {
+        addMail(season, {
+          type: 'career',
+          icon: '📋',
+          title: 'You have new job offers',
+          body: 'You have ' + offers.length + ' job offer(s). Use the buttons below to view or accept.',
+          offers: offers.map(function(o) { return { teamName: o.team && o.team.name, salary: o.salary, reason: o.reason }; })
+        });
+      }
       const jobModal = document.getElementById('jobOffersModal');
       if (jobModal) jobModal.style.display = 'flex';
     });
@@ -4749,8 +6146,10 @@ function initUI() {
       const rel = (season.relegationResults || []).find(r => r.challengerTeam === userTeam.name);
       outcome = rel ? (rel.winner === userTeam.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
     } else if (userTeam.tier === 'Challenger') {
-      outcome = 'Challenger: ' + (position === 1 ? '1st' : position === 2 ? '2nd' : position === 3 ? '3rd' : (position + 'th'));
-    } else outcome = 'Championship Playoffs: Eliminated';
+      outcome = 'Challenger Championship: Did not qualify';
+    } else {
+      outcome = getMainPlayoffOutcome(season, userTeam.name, position, useChallengerForPosition);
+    }
 
     const allTeams = [...league, ...(challengerLeague || [])];
     const currentMainTeams = allTeams.filter(t => t.tier === 'Main');
@@ -4774,6 +6173,13 @@ function initUI() {
           ? 'promoted'
           : (position >= 2 && position <= 6 && !useChallengerForPosition ? 'playoffs' : 'mid')));
     pendingSeasonEnd = { season, result, position, rec, outcome };
+    if ((outcome.indexOf('Stayed in Main') !== -1 && outcome.indexOf('Relegation') !== -1) || outcome.indexOf('Promoted to Main') !== -1) {
+      const userTeamRel = league && league[0];
+      if (userTeamRel && userTeamRel.players && userTeamRel.players.length && typeof triggerPlayerChat === 'function' && season.inbox) {
+        const firstPlayer = userTeamRel.players[0];
+        if (firstPlayer) triggerPlayerChat(season, firstPlayer, 'relegation_survived');
+      }
+    }
     const offers = Nexus.generateJobOffers ? Nexus.generateJobOffers(userTeam, seasonOutcome, cycleCount, allTeams) : [];
     if (offers.length > 0) {
       currentJobOffers = offers;
@@ -4802,6 +6208,87 @@ function initUI() {
           handleSeasonFinished(result);
           return;
         }
+        // Notify about new injuries on the user's team
+        if (result.newInjuries && result.newInjuries.length) {
+          const userTeamForInj = league && league[0];
+          result.newInjuries.forEach(({ player, team, injury }) => {
+            if (!userTeamForInj || team !== userTeamForInj) return;
+            const label = (INJURY_TYPES[injury.type] && INJURY_TYPES[injury.type].label) || injury.type;
+            const icon = injury.severity === 'Major' ? '🔴' : injury.severity === 'Moderate' ? '🟠' : '🟡';
+            showNotification(icon + ' ' + getPlayerDisplayName(player) + ' sustained a ' + injury.severity + ' ' + label + ' (' + injury.matchdaysLeft + ' matchdays)', 'error', 7000);
+            addMail(season, {
+              type: 'injury', icon,
+              title: getPlayerDisplayName(player) + ' — ' + injury.severity + ' ' + label,
+              body: getPlayerDisplayName(player) + ' is out for ' + injury.matchdaysLeft + ' matchday(s). ' + (injury.severity === 'Major' ? 'Cannot play until fully recovered.' : 'Can still play but with reduced performance.'),
+              matchday: (season.currentMatchday || 1) - 1,
+              actionRoute: 'roster', actionLabel: 'Go to Roster'
+            });
+            if (injury.severity === 'Major') triggerPlayerChat(season, player, 'major_injury', 'This ' + label);
+          });
+        }
+
+        // Notify about morale events on the user's team
+        if (result.moraleEvents && result.moraleEvents.length) {
+          const userTeamForMorale = league && league[0];
+          result.moraleEvents.forEach(ev => {
+            if (!userTeamForMorale || ev.team !== userTeamForMorale) return;
+            if (ev.transferRequest) {
+              const label = ev.newLabel || 'Unhappy';
+              showNotification('😤 ' + getPlayerDisplayName(ev.player) + ' is ' + label + ' and has requested a transfer.', 'error', 8000);
+              addMail(season, {
+                type: 'transfer', icon: '😤',
+                title: getPlayerDisplayName(ev.player) + ' — Transfer Request',
+                body: getPlayerDisplayName(ev.player) + ' is ' + label + ' and has formally requested a transfer.',
+                matchday: (season.currentMatchday || 1) - 1,
+                actionRoute: 'roster', actionLabel: 'Go to Roster'
+              });
+              triggerPlayerChat(season, ev.player, 'transfer_request');
+            } else if (ev.dropped) {
+              showNotification('😟 ' + getPlayerDisplayName(ev.player) + '\'s morale dropped to ' + ev.newLabel + '.', 'error', 6000);
+              if (ev.newLabel === 'Miserable' || ev.newLabel === 'Unhappy') {
+                addMail(season, {
+                  type: 'morale', icon: '😟',
+                  title: getPlayerDisplayName(ev.player) + ' — Morale Drop',
+                  body: getPlayerDisplayName(ev.player) + '\'s morale has dropped to ' + ev.newLabel + '. Consider speaking to them.',
+                  matchday: (season.currentMatchday || 1) - 1,
+                  actionRoute: 'roster', actionLabel: 'Go to Roster'
+                });
+              }
+            } else {
+              showNotification('😊 ' + getPlayerDisplayName(ev.player) + '\'s morale improved to ' + ev.newLabel + '.', 'success', 5000);
+              if (typeof triggerPlayerChat === 'function' && season.inbox) triggerPlayerChat(season, ev.player, 'morale_improved');
+            }
+          });
+        }
+
+        // Hot streak chats — check after each regular matchday
+        if (result.matchdayResults && (league && league[0])) {
+          const userTeamHS = league[0];
+          (userTeamHS.players || []).forEach(function(p) {
+            const alreadyChat = season.inbox && season.inbox.chats.some(function(c) { return c.playerId === p.id && c.scenario === 'hot_streak'; });
+            if (alreadyChat) return;
+            if (typeof getPlayerFormState === 'function' && getPlayerFormState(p) === 'hot') {
+              triggerPlayerChat(season, p, 'hot_streak');
+            }
+          });
+        }
+
+        // Add mail for invitational result
+        if (result.invitationalChampion) {
+          const userT = league && league[0];
+          const champ = result.invitationalChampion;
+          const isUs = userT && champ.name === userT.name;
+          addMail(season, {
+            type: 'result', icon: '🏆',
+            title: 'Mid-Season Invitational — ' + champ.name + ' wins!',
+            body: isUs ? 'Your team won the Mid-Season Invitational! Prize: $300,000.' : champ.name + ' claimed the Mid-Season Invitational trophy.',
+            matchday: season.currentMatchday || 0
+          });
+          if (isUs && userT && userT.players && userT.players.length && typeof triggerPlayerChat === 'function' && season.inbox) {
+            const firstPlayer = userT.players[0];
+            if (firstPlayer) triggerPlayerChat(season, firstPlayer, 'trophy_or_playoffs');
+          }
+        }
 
         const runPostStageUpdates = () => {
           const wasRegular = season.phase === 'regular';
@@ -4826,6 +6313,7 @@ function initUI() {
           updateCareerUI(season);
           updateFinanceUI(userTeamRef());
           updateCycleUI();
+          if (typeof updateInboxBadge === 'function') updateInboxBadge();
         };
 
         const userTeam = userTeamRef();
@@ -4838,12 +6326,42 @@ function initUI() {
           }
         }
 
+        if (previousPhase === 'regular' && season.phase === 'playoffs' && season.playoffsBracket && season.playoffsBracket.matches && userTeam && !season.playoffsQualifiedChatDone) {
+          const inBracket = season.playoffsBracket.matches.some(function(m) { return m.teamA === userTeam || m.teamB === userTeam; });
+          if (inBracket && season.inbox && typeof triggerPlayerChat === 'function' && userTeam.players && userTeam.players.length) {
+            season.playoffsQualifiedChatDone = true;
+            triggerPlayerChat(season, userTeam.players[0], 'trophy_or_playoffs');
+          }
+        }
+
         if (previousPhase === 'playoffs' && result.roundResults && result.roundResults.length && userTeam) {
           const ourPlayoff = result.roundResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
           if (ourPlayoff) {
             pendingAfterMatchResult = runPostStageUpdates;
             showMatchResultPage(ourPlayoff.match, ourPlayoff.result, season);
             return;
+          }
+        }
+
+        if (previousPhase === 'invitational' && result.roundResults && result.roundResults.length && userTeam) {
+          const ourInv = result.roundResults.find(r => r.match.teamA === userTeam || r.match.teamB === userTeam);
+          if (ourInv) {
+            pendingAfterMatchResult = runPostStageUpdates;
+            showMatchResultPage(ourInv.match, ourInv.result, season);
+            return;
+          }
+          // user wasn't in this round — show champion notification if final
+          if (result.invitationalChampion) {
+            const champ = result.invitationalChampion;
+            showNotification('🏆 Mid-Season Invitational champion: ' + champ.name, 'success', 6000);
+          }
+        }
+
+        // Invitational champion notification when user WAS in the final
+        if (result.invitationalChampion && previousPhase === 'invitational') {
+          const champ = result.invitationalChampion;
+          if (userTeam && champ.name === userTeam.name) {
+            showNotification('🏆 Your team won the Mid-Season Invitational! (+$300,000)', 'success', 8000);
           }
         }
 
@@ -4898,7 +6416,7 @@ function initUI() {
     if (bankruptcyModalOnLoad) bankruptcyModalOnLoad.style.display = 'flex';
   }
 
-  // ===== OPERATIONS (Coaches, Facilities, Sponsors) =====
+  // ===== OPERATIONS (Coaches, Facilities, Psychology, Sponsors, Bootcamp) =====
   var operationsTabBtns = document.querySelectorAll('.operations-tab');
   var operationsPanels = document.querySelectorAll('.operations-panel');
   var activeOperationsPanel = 'coaches';
@@ -4910,7 +6428,8 @@ function initUI() {
     var facilitiesEl = document.getElementById('operationsFacilities');
     var psychologyEl = document.getElementById('operationsPsychology');
     var sponsorsEl = document.getElementById('operationsSponsors');
-    if (!coachesEl || !facilitiesEl || !psychologyEl || !sponsorsEl) return;
+    var bootcampEl = document.getElementById('operationsBootcamp');
+    if (!coachesEl || !facilitiesEl || !psychologyEl || !sponsorsEl || !bootcampEl) return;
 
     if (activeOperationsPanel === 'coaches') {
       var coachTiers = window.Nexus.COACH_TIERS || [];
@@ -4939,8 +6458,8 @@ function initUI() {
           if (window.Nexus.syncPressureToPrestige) window.Nexus.syncPressureToPrestige(userTeamRef(), environmentMap);
           saveGameState();
           showNotification('Upgraded to ' + (tier.name || 'Level ' + level) + '!', 'success');
+          if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '📊', title: 'Coach upgraded', body: 'Upgraded to ' + (tier.name || 'Level ' + level) + '!' });
           updateOperationsUI();
-          if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
         });
       });
     }
@@ -4979,6 +6498,7 @@ function initUI() {
           if (window.Nexus.syncPressureToPrestige) window.Nexus.syncPressureToPrestige(userTeamRef(), environmentMap);
           saveGameState();
           showNotification('Upgraded to ' + (tier.name || 'Level ' + level) + '!', 'success');
+          if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '🏟', title: 'Facility upgraded', body: 'Upgraded to ' + (tier.name || 'Level ' + level) + '!', actionRoute: 'operations', actionLabel: 'Operations' });
           updateOperationsUI();
           if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
         });
@@ -5014,6 +6534,7 @@ function initUI() {
           if (window.Nexus.syncTeamEnvironmentFromTiers) window.Nexus.syncTeamEnvironmentFromTiers(userTeamRef(), environmentMap);
           saveGameState();
           showNotification(result.message || 'Psychology upgraded!', 'success');
+          if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '🧠', title: 'Psychology upgraded', body: result.message || 'Psychology upgraded!', actionRoute: 'operations', actionLabel: 'Operations' });
           updateOperationsUI();
           if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
         });
@@ -5038,15 +6559,68 @@ function initUI() {
             var result = window.Nexus.selectSponsor && window.Nexus.selectSponsor(userTeamRef(), id);
             if (result && result.success) {
               showNotification(result.message || 'Sponsor signed.', 'success');
+              if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '📄', title: 'Sponsor signed', body: result.message || 'Sponsor signed.' });
               saveGameState();
               updateOperationsUI();
               if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
             } else {
               showNotification(result && result.message ? result.message : 'Could not sign sponsor.', 'error');
+              if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'error', icon: '❌', title: 'Could not sign sponsor', body: (result && result.message) ? result.message : 'Could not sign sponsor.' });
             }
           });
         });
       }
+    }
+
+    if (activeOperationsPanel === 'bootcamp') {
+      var bootcampTypes = window.Nexus.BOOTCAMP_TYPES || [];
+      var activeBootcamp = (userTeam.activeBootcamp && (userTeam.activeBootcamp.remainingMatchdays || 0) > 0) ? userTeam.activeBootcamp : null;
+      if (!userTeam.bootcampUsageThisSeason || typeof userTeam.bootcampUsageThisSeason !== 'object') userTeam.bootcampUsageThisSeason = {};
+      var usageMap = userTeam.bootcampUsageThisSeason;
+      var statusHtml = activeBootcamp
+        ? '<div class="operations-bootcamp-status is-active"><strong>Active:</strong> ' + activeBootcamp.name + ' <span class="operations-tier-level">' + activeBootcamp.remainingMatchdays + ' matchday(s) left</span></div>'
+        : '<div class="operations-bootcamp-status"><strong>No active bootcamp.</strong> Each bootcamp type can be used once per season and temporarily replaces team training effects.</div>';
+
+      bootcampEl.innerHTML = '<div class="operations-bootcamp">' + statusHtml + '<div class="operations-bootcamp-grid">' + bootcampTypes.map(function(b) {
+        var hasFinance = !!(userTeam.finance);
+        var canAfford = hasFinance && (userTeam.finance.capital || 0) >= (b.cost || 0);
+        var alreadyUsed = !!usageMap[b.id];
+        var isCurrentActive = !!(activeBootcamp && activeBootcamp.id === b.id);
+        var disabled = true;
+        var btnLabel = 'Activate';
+        if (isCurrentActive) {
+          btnLabel = 'Active';
+        } else if (alreadyUsed) {
+          btnLabel = 'Locked (used this season)';
+        } else if (activeBootcamp) {
+          btnLabel = 'Bootcamp active';
+        } else if (!canAfford) {
+          btnLabel = 'Insufficient funds';
+        } else {
+          disabled = false;
+        }
+        var activeClass = (activeBootcamp && activeBootcamp.id === b.id) ? ' is-active' : '';
+        var durationText = (b.duration || 0) + ' matchday(s)';
+        var costText = '$' + (b.cost || 0).toLocaleString();
+        return '<div class="operations-bootcamp-card' + activeClass + '"><div class="operations-bootcamp-card__header"><span class="operations-bootcamp-icon">' + (b.icon || 'CAMP') + '</span><strong class="operations-bootcamp-name">' + (b.name || 'Bootcamp') + '</strong></div><p class="operations-bootcamp-desc">' + (b.description || '') + '</p><p class="operations-bootcamp-effect">' + (b.effectDescription || '') + '</p><div class="operations-bootcamp-meta"><span>Cost: ' + costText + '</span><span>Duration: ' + durationText + '</span></div><button type="button" class="btn btn--primary operations-bootcamp-btn operations-activate-bootcamp" data-bootcamp-id="' + (b.id || '') + '"' + (disabled ? ' disabled' : '') + '>' + btnLabel + '</button></div>';
+      }).join('') + '</div></div>';
+
+      bootcampEl.querySelectorAll('.operations-activate-bootcamp').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var bootcampId = btn.getAttribute('data-bootcamp-id');
+          if (!bootcampId || !userTeamRef()) return;
+          var result = window.Nexus.activateBootcamp && window.Nexus.activateBootcamp(userTeamRef(), bootcampId);
+          if (result && result.success) {
+            showNotification(result.message || 'Bootcamp activated.', 'success');
+            saveGameState();
+            updateOperationsUI();
+            if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
+            if (typeof updateFixtureUI === 'function') updateFixtureUI(season);
+          } else {
+            showNotification(result && result.message ? result.message : 'Could not activate bootcamp.', 'error');
+          }
+        });
+      });
     }
   }
 
@@ -5113,6 +6687,59 @@ function initUI() {
     ].filter(Boolean).join(' ');
   }
 
+  function primeAIBootcampForUpcomingUserFixture(seasonData) {
+    if (!seasonData || !window.Nexus || !window.Nexus.shouldAIActivateBootcamp) return;
+    const userTeam = userTeamRef();
+    if (!userTeam || !userTeam.name) return;
+
+    const phase = seasonData.phase || 'regular';
+    if (phase === 'finished') return;
+
+    let targetSeason = seasonData;
+    let opponent = null;
+    let token = null;
+
+    if (phase === 'playoffs' && seasonData.playoffsBracket && Array.isArray(seasonData.playoffsBracket.matches)) {
+      const round = seasonData.playoffsBracket.round || 0;
+      const ourMatch = seasonData.playoffsBracket.matches.find(function(m) {
+        return m && m.teamA && m.teamB && (m.teamA.name === userTeam.name || m.teamB.name === userTeam.name);
+      });
+      if (!ourMatch) return;
+      opponent = ourMatch.teamA.name === userTeam.name ? ourMatch.teamB : ourMatch.teamA;
+      token = 'playoffs:' + round + ':' + userTeam.name;
+    } else if (phase === 'relegation' && seasonData.relegationCandidates && seasonData.challengerPromotion) {
+      const main = seasonData.relegationCandidates || [];
+      const challenger = seasonData.challengerPromotion || [];
+      for (let i = 0; i < Math.max(main.length, challenger.length); i++) {
+        const a = main[i];
+        const b = challenger[i];
+        if (!a || !b) continue;
+        if (a.name === userTeam.name) { opponent = b; break; }
+        if (b.name === userTeam.name) { opponent = a; break; }
+      }
+      if (!opponent) return;
+      token = 'relegation:' + (seasonData.currentMatchday || 0) + ':' + userTeam.name;
+    } else {
+      const isChallengerManager = userTeam.tier === 'Challenger';
+      if (isChallengerManager && challengerSeason && challengerSeason.teams && challengerSeason.teams.some(function(t) { return t.name === userTeam.name; })) {
+        targetSeason = challengerSeason;
+      }
+      const md = targetSeason.currentMatchday || 0;
+      const matches = (targetSeason.matchdays || [])[md] || [];
+      const ourMatch = matches.find(function(m) {
+        return m && m.teamA && m.teamB && (m.teamA.name === userTeam.name || m.teamB.name === userTeam.name);
+      });
+      if (!ourMatch) return;
+      opponent = ourMatch.teamA.name === userTeam.name ? ourMatch.teamB : ourMatch.teamA;
+      token = 'regular:' + md + ':' + userTeam.name;
+    }
+
+    if (!opponent || !opponent.name) return;
+    if (targetSeason._aiBootcampPreviewToken === token) return;
+    targetSeason._aiBootcampPreviewToken = token;
+    window.Nexus.shouldAIActivateBootcamp(opponent, userTeam);
+  }
+
   // ===== FIXTURE UI (next match / stage) =====
   function updateFixtureUI(seasonData) {
     updateOverviewAgeUI();
@@ -5129,18 +6756,90 @@ function initUI() {
     if (metaDescEl) metaDescEl.textContent = currentMeta && currentMeta.description ? currentMeta.description : (currentMeta ? 'Tempo: ' + currentMeta.tempo + ' | Aggression: ' + (currentMeta.aggressionLevel != null ? currentMeta.aggressionLevel : '—') : '');
 
     const userTeam = league[0];
+    if (userTeam) primeAIBootcampForUpcomingUserFixture(seasonData);
     const teamPlanKeys = window.Nexus.TEAM_TRAINING_PLAN_KEYS || [];
     if (userTeam && teamPlanKeys.length && (userTeam.activeTeamTraining == null || userTeam.activeTeamTraining === '' || !teamPlanKeys.includes(userTeam.activeTeamTraining))) {
       userTeam.activeTeamTraining = teamPlanKeys[0];
     }
+    const powerVsOppEl = document.getElementById('uiFixturePowerVsOpponent');
+    if (powerVsOppEl) powerVsOppEl.textContent = '—';
+    function setPowerVsOpponent(myTeam, oppTeam) {
+      if (!powerVsOppEl || !myTeam || !oppTeam || !window.Nexus.calculateTeamExpectedPower) return;
+      var defaultEnv = { coachQuality: 50, infrastructure: 50, psychologySupport: 50, pressure: 50 };
+      var envMy = (environmentMap && environmentMap[myTeam.name]) || defaultEnv;
+      var envOpp = (environmentMap && environmentMap[oppTeam.name]) || defaultEnv;
+      var dataMy = window.Nexus.calculateTeamExpectedPower(myTeam, { environment: envMy, meta: currentMeta });
+      var dataOpp = window.Nexus.calculateTeamExpectedPower(oppTeam, { environment: envOpp, meta: currentMeta });
+      var pMy = dataMy && dataMy.finalPower != null ? dataMy.finalPower : 0;
+      var pOpp = dataOpp && dataOpp.finalPower != null ? dataOpp.finalPower : 0;
+      if (typeof calculateWinProbability !== 'function') { powerVsOppEl.textContent = '—'; return; }
+      var prob = calculateWinProbability(pMy, pOpp);
+      powerVsOppEl.textContent = Math.round(prob * 100) + '%';
+    }
+    const activeBootcamp = (userTeam && userTeam.activeBootcamp && (userTeam.activeBootcamp.remainingMatchdays || 0) > 0) ? userTeam.activeBootcamp : null;
     const trainingEl = document.getElementById('uiActiveTeamTraining');
     const trainingDescEl = document.getElementById('uiActiveTeamTrainingDesc');
+    const fixtureBootcampEl = document.getElementById('uiFixtureBootcamp');
     const planName = (userTeam && userTeam.activeTeamTraining) ? userTeam.activeTeamTraining : '—';
-    if (trainingEl) trainingEl.textContent = planName;
+    if (trainingEl) {
+      trainingEl.textContent = activeBootcamp
+        ? (activeBootcamp.name + ' (' + activeBootcamp.remainingMatchdays + 'd)')
+        : planName;
+    }
     if (trainingDescEl) {
-      const plans = window.Nexus.TEAM_TRAINING_PLANS;
-      const desc = (planName !== '—' && plans && plans[planName] && plans[planName].description) ? ' — ' + plans[planName].description : '';
+      let desc = '';
+      if (activeBootcamp) {
+        desc = ' — Bootcamp active (team training effects replaced)';
+      } else {
+        const plans = window.Nexus.TEAM_TRAINING_PLANS;
+        desc = (planName !== '—' && plans && plans[planName] && plans[planName].description) ? ' — ' + plans[planName].description : '';
+      }
       trainingDescEl.textContent = desc;
+    }
+    if (fixtureBootcampEl) {
+      if (!activeBootcamp) {
+        fixtureBootcampEl.innerHTML = '<div class="fixture__bootcamp-title">Bootcamp</div><div class="fixture__bootcamp-body">No active bootcamp.</div>';
+      } else {
+        const effect = activeBootcamp.effect || {};
+        const details = [];
+        if (effect.statBoosts) {
+          Object.keys(effect.statBoosts).forEach(function(statKey) {
+            const mult = effect.statBoosts[statKey];
+            if (mult == null) return;
+            const delta = Math.round((mult - 1) * 100);
+            const sign = delta >= 0 ? '+' : '';
+            details.push(sign + delta + '% ' + formatStatKey(statKey));
+          });
+        }
+        if (effect.allStatsBonus != null) {
+          const deltaAll = Math.round((effect.allStatsBonus - 1) * 100);
+          const signAll = deltaAll >= 0 ? '+' : '';
+          details.push(signAll + deltaAll + '% all stats');
+        }
+        if (effect.synergyBonus != null) {
+          const syn = Math.round(effect.synergyBonus * 100);
+          details.push('+' + syn + '% team synergy');
+        }
+        if (effect.metaFavoredBonus != null) {
+          const fav = Math.round(effect.metaFavoredBonus * 100);
+          details.push('+' + fav + '% favored-role meta bonus');
+        }
+        if (effect.metaNerfedReduction != null) {
+          const red = Math.round(effect.metaNerfedReduction * 100);
+          details.push(red + '% nerfed-role penalty reduction');
+        }
+        if (effect.pressureReduction != null) {
+          const pressure = Math.round(effect.pressureReduction * 100);
+          details.push('-' + pressure + '% pressure impact');
+        }
+        if (effect.mentalBoost != null) {
+          details.push('+' + effect.mentalBoost + ' effective Mental');
+        }
+        const detailsHtml = details.length
+          ? '<ul class="fixture__bootcamp-list">' + details.map(function(item) { return '<li>' + item + '</li>'; }).join('') + '</ul>'
+          : '';
+        fixtureBootcampEl.innerHTML = '<div class="fixture__bootcamp-title">' + activeBootcamp.name + ' · ' + activeBootcamp.remainingMatchdays + ' matchday(s) left</div><div class="fixture__bootcamp-body">Effects active this matchday:</div>' + detailsHtml;
+      }
     }
     const phase = seasonData.phase || 'regular';
     const matchdayInfoEl = document.getElementById('uiMatchdayInfo');
@@ -5148,15 +6847,19 @@ function initUI() {
     const fixturePanel = document.getElementById('fixturePanel');
     const titleEl = document.getElementById('uiFixtureTitle');
     if (fixturePanel) {
-      fixturePanel.classList.remove('panel--playoffs', 'panel--relegation');
+      fixturePanel.classList.remove('panel--playoffs', 'panel--relegation', 'panel--invitational');
       if (phase === 'playoffs') fixturePanel.classList.add('panel--playoffs');
       else if (phase === 'relegation') fixturePanel.classList.add('panel--relegation');
+      else if (phase === 'invitational') fixturePanel.classList.add('panel--invitational');
     }
     if (titleEl) {
       if (phase === 'finished') titleEl.textContent = 'Season complete';
       else if (phase === 'playoffs' && seasonData.playoffsBracket) {
         const r = seasonData.playoffsBracket.round;
         titleEl.textContent = r === 2 ? 'Championship – Final' : 'Championship – Quarterfinals';
+      } else if (phase === 'invitational' && seasonData.invitationalBracket) {
+        const ir = seasonData.invitationalBracket.round;
+        titleEl.textContent = ir === 1 ? 'Invitational – Quarterfinals' : ir === 2 ? 'Invitational – Semifinals' : 'Invitational – Final';
       } else if (phase === 'relegation') titleEl.textContent = 'Relegation – Decider';
       else titleEl.textContent = 'Next Fixture';
     }
@@ -5180,9 +6883,37 @@ function initUI() {
         const isYou = nextMatch.teamA.name === userTeam.name || nextMatch.teamB.name === userTeam.name;
         if (badgeLeft) { badgeLeft.textContent = isYou ? 'YOU' : 'OPP'; badgeLeft.classList.toggle('badge--you', isYou); }
         if (badgeRight) badgeRight.textContent = 'OPP';
+        if (isYou && typeof setPowerVsOpponent === 'function') {
+          var oppTeam = nextMatch.teamA.name === userTeam.name ? nextMatch.teamB : nextMatch.teamA;
+          setPowerVsOpponent(userTeam, oppTeam);
+        }
       } else {
         teamNameEl.textContent = 'Playoffs';
         oppEl.textContent = 'Round ' + bracket.round;
+        if (badgeLeft) { badgeLeft.textContent = 'OPP'; badgeLeft.classList.remove('badge--you'); }
+        if (badgeRight) badgeRight.textContent = 'OPP';
+      }
+      return;
+    }
+
+    if (phase === 'invitational' && seasonData.invitationalBracket) {
+      const ib = seasonData.invitationalBracket;
+      const roundLabel = ib.round === 1 ? 'QF' : ib.round === 2 ? 'SF' : 'Final';
+      if (matchdayInfoEl) matchdayInfoEl.textContent = 'Invitational · ' + roundLabel;
+      const nextInv = ib.matches[0];
+      if (nextInv) {
+        const isYou = nextInv.teamA.name === userTeam.name || nextInv.teamB.name === userTeam.name;
+        teamNameEl.textContent = nextInv.teamA.name;
+        oppEl.textContent = nextInv.teamB.name;
+        if (badgeLeft) { badgeLeft.textContent = isYou ? 'YOU' : 'OPP'; badgeLeft.classList.toggle('badge--you', isYou); }
+        if (badgeRight) badgeRight.textContent = isYou ? 'OPP' : 'OPP';
+        if (isYou && typeof setPowerVsOpponent === 'function') {
+          var invOpp = nextInv.teamA.name === userTeam.name ? nextInv.teamB : nextInv.teamA;
+          setPowerVsOpponent(userTeam, invOpp);
+        }
+      } else {
+        teamNameEl.textContent = 'Invitational';
+        oppEl.textContent = roundLabel;
         if (badgeLeft) { badgeLeft.textContent = 'OPP'; badgeLeft.classList.remove('badge--you'); }
         if (badgeRight) badgeRight.textContent = 'OPP';
       }
@@ -5250,6 +6981,10 @@ function initUI() {
       }
       if (badgeLeft) { badgeLeft.textContent = 'YOU'; badgeLeft.classList.add('badge--you'); }
       if (badgeRight) badgeRight.textContent = 'OPP';
+      if (typeof setPowerVsOpponent === 'function') {
+        var opponentTeam = ourMatch.teamA.name === userTeam.name ? ourMatch.teamB : ourMatch.teamA;
+        setPowerVsOpponent(userTeam, opponentTeam);
+      }
     } else {
       teamNameEl.textContent = '—';
       oppEl.textContent = 'Matchday ' + (dataForFixture.currentMatchday + 1) + ' (no your game)';
@@ -5257,6 +6992,65 @@ function initUI() {
       if (mapEl) { mapEl.textContent = '—'; mapEl.style.display = ''; }
       if (badgeLeft) { badgeLeft.textContent = 'OPP'; badgeLeft.classList.remove('badge--you'); }
       if (badgeRight) badgeRight.textContent = 'OPP';
+    }
+
+    // --- Team Snapshot: Momentum, Form strip, Confidence, Synergy ---
+    const snapUserTeam = league[0];
+    if (snapUserTeam) {
+      // Momentum score
+      const momentumEl = document.getElementById('uiMomentum');
+      if (momentumEl) {
+        const score = getTeamMomentumScore(snapUserTeam);
+        const sign = score > 0 ? '+' : '';
+        momentumEl.textContent = sign + score;
+        momentumEl.className = 'status__v'
+          + (score > 1 ? ' status__v--positive' : score < -1 ? ' status__v--negative' : '');
+      }
+
+      // Form strip (W/L dots)
+      const formStripEl = document.getElementById('uiFormStrip');
+      if (formStripEl) {
+        const form = snapUserTeam.recentForm || [];
+        if (form.length) {
+          formStripEl.innerHTML = form.map(r =>
+            '<span class="form-dot form-dot--' + (r === 'W' ? 'win' : 'loss') + '">' + r + '</span>'
+          ).join('');
+        } else {
+          formStripEl.innerHTML = '<span class="form-dot form-dot--empty">No results yet</span>';
+        }
+      }
+
+      // Confidence — based on how many starters are hot vs cold
+      const confidenceEl = document.getElementById('uiConfidence');
+      if (confidenceEl) {
+        const starters = (snapUserTeam.starterSlots || []).filter(Boolean);
+        const hotCount = starters.filter(p => getPlayerFormState(p) === 'hot').length;
+        const coldCount = starters.filter(p => getPlayerFormState(p) === 'cold').length;
+        let conf, confClass;
+        if (hotCount >= 3) { conf = 'High'; confClass = 'status__v--positive'; }
+        else if (hotCount >= 2 && coldCount === 0) { conf = 'Good'; confClass = 'status__v--positive'; }
+        else if (coldCount >= 3) { conf = 'Low'; confClass = 'status__v--negative'; }
+        else if (coldCount >= 2) { conf = 'Shaky'; confClass = 'status__v--negative'; }
+        else { conf = 'Medium'; confClass = ''; }
+        confidenceEl.textContent = conf;
+        confidenceEl.className = 'status__v' + (confClass ? ' ' + confClass : '');
+      }
+
+      // Synergy — wire up the existing synergy calculation
+      const synEl = document.getElementById('uiSyn');
+      if (synEl && window.Nexus && window.Nexus.calculateTeamSynergy) {
+        const activeMeta = meta && meta.name ? meta : (Nexus.getCurrentMeta ? Nexus.getCurrentMeta() : null);
+        const envForSyn = (environmentMap && environmentMap[snapUserTeam.name]) || {};
+        const starters5 = (snapUserTeam.starterSlots || []).filter(Boolean).slice(0, 5);
+        if (starters5.length) {
+          const synData = window.Nexus.calculateTeamSynergy(starters5, activeMeta, envForSyn, null);
+          const mult = synData && synData.synergyMultiplier != null ? synData.synergyMultiplier : 1;
+          const pct = Math.round((mult - 1) * 100);
+          const sign = pct >= 0 ? '+' : '';
+          synEl.textContent = sign + pct + '%';
+          synEl.className = 'status__v' + (pct > 0 ? ' status__v--positive' : pct < 0 ? ' status__v--negative' : '');
+        }
+      }
     }
   }
 
@@ -5314,6 +7108,7 @@ function initUI() {
     const standings = (isChallengerManager && challengerSeason && challengerSeason.standings) ? challengerSeason.standings : seasonData.standings;
     const phase = seasonData.phase || 'regular';
 
+    let positionValue = null;
     if (!standings || !standings[userTeam.name]) {
       posEl.textContent = '—';
       recEl.textContent = '0W - 0L';
@@ -5321,6 +7116,7 @@ function initUI() {
     } else {
       const sorted = Nexus.getSortedStandings(standings);
       const posIndex = sorted.findIndex(t => t.teamName === userTeam.name);
+      positionValue = posIndex === -1 ? null : posIndex + 1;
       const position = posIndex === -1 ? '—' : (posIndex + 1) + (posIndex === 0 ? 'st' : posIndex === 1 ? 'nd' : posIndex === 2 ? 'rd' : 'th');
       posEl.textContent = position;
       const s = standings[userTeam.name];
@@ -5348,8 +7144,10 @@ function initUI() {
       } else if (seasonData.challengerPromotion && seasonData.challengerPromotion.some(t => t.name === userTeam.name)) {
         const rel = (seasonData.relegationResults || []).find(r => r.challengerTeam === userTeam.name);
         outcome = rel ? (rel.winner === userTeam.name ? 'Challenger Championship: Promoted to Main' : 'Challenger Championship: Stayed in Challenger') : 'Challenger Championship: Stayed in Challenger';
+      } else if (isChallengerManager) {
+        outcome = 'Challenger Championship: Did not qualify';
       } else {
-        outcome = 'Championship Playoffs: Eliminated';
+        outcome = getMainPlayoffOutcome(seasonData, userTeam.name, positionValue, false);
       }
     } else if (phase === 'relegation') {
       const inMain = seasonData.relegationCandidates && seasonData.relegationCandidates.some(t => t.name === userTeam.name);
@@ -5535,6 +7333,35 @@ function initUI() {
     return badges;
   }
 
+  function getMoraleBadgeHTML(player) {
+    const m = player.morale != null ? player.morale : 70;
+    const info = Nexus.getMoraleInfo ? Nexus.getMoraleInfo(m) : { label: 'Neutral', cssClass: 'morale--neutral' };
+    // Only show badge if not Neutral (avoid cluttering cards for most players)
+    if (info.label === 'Neutral') return '';
+    return '<span class="morale-badge ' + info.cssClass + '" title="Morale: ' + info.label + ' (' + Math.round(m) + ')">' + info.label + '</span>';
+  }
+
+  function getFormBadgeHTML(player) {
+    const state = getPlayerFormState(player);
+    if (state === 'hot') return '<span class="form-badge form-badge--hot" title="Hot form">🔥</span>';
+    if (state === 'cold') return '<span class="form-badge form-badge--cold" title="Cold form">❄️</span>';
+    return '';
+  }
+
+  function getInjuryBadgeHTML(player) {
+    const inj = Nexus.getPlayerInjury ? Nexus.getPlayerInjury(player) : (player && player.injury && player.injury.severity ? player.injury : null);
+    if (!inj) return '';
+    const label = (INJURY_TYPES[inj.type] && INJURY_TYPES[inj.type].label) || inj.type;
+    const md = inj.matchdaysLeft;
+    if (inj.severity === 'Major') {
+      return '<span class="injury-badge injury-badge--major" title="' + label + ' – Out ' + md + ' matchday(s)">🔴 OUT (' + md + 'md)</span>';
+    }
+    if (inj.severity === 'Moderate') {
+      return '<span class="injury-badge injury-badge--moderate" title="' + label + ' – ' + md + ' matchday(s) remaining">🟠 ' + label + ' (' + md + 'md)</span>';
+    }
+    return '<span class="injury-badge injury-badge--minor" title="' + label + ' – ' + md + ' matchday(s) remaining">🟡 ' + label + ' (' + md + 'md)</span>';
+  }
+
   const BENCH_SLOT_COUNT = 5;
   const RESERVE_SLOT_COUNT = 6;
   const BENCH_COUNT_FOR_MATCH = 3;
@@ -5632,11 +7459,16 @@ function initUI() {
         const contractClass = isFinalYear ? 'player-card__contract player-card__contract--final' : 'player-card__contract';
         const playerIdx = allPlayers.indexOf(p);
         card.dataset.playerIndex = playerIdx;
+        const injBadge = getInjuryBadgeHTML(p);
+        const formBadge = getFormBadgeHTML(p);
+        const moraleBadge = getMoraleBadgeHTML(p);
         card.innerHTML = `
           <div class="player-card__header">
             <strong>${getPlayerDisplayName(p)}</strong>
-            <span class="player-card__badges">${ageBadges} ${badge}</span>
+            <span class="player-card__badges">${ageBadges} ${badge} ${formBadge}</span>
           </div>
+          ${moraleBadge ? '<div class="player-card__morale">' + moraleBadge + '</div>' : ''}
+          ${injBadge ? '<div class="player-card__injury">' + injBadge + '</div>' : ''}
           <span class="player-role-primary">Primary: ${p.roleBias.primaryRoleBias}</span>
           <span class="player-role-secondary">Secondary: ${p.roleBias.secondaryRoleBias}</span>
           <span class="player-flex">Flex: ${p.roleBias.flexPotential}</span>
@@ -5666,12 +7498,16 @@ function initUI() {
         const salary = p.salary != null ? p.salary : 5000;
         const isFinalYear = years === 1;
         const contractClass = isFinalYear ? 'player-contract-info player-contract-info--final' : 'player-contract-info';
+        const injBadgeBench = getInjuryBadgeHTML(p);
+        const formBadgeBench = getFormBadgeHTML(p);
+        const moraleBadgeBench = getMoraleBadgeHTML(p);
         row.innerHTML = `
-          <span class="bench-row__name">${getPlayerDisplayName(p)} <span class="age-badge ${getAgePhaseClass(p.age)}">${p.age != null ? p.age : '?'}</span></span>
+          <span class="bench-row__name">${getPlayerDisplayName(p)} <span class="age-badge ${getAgePhaseClass(p.age)}">${p.age != null ? p.age : '?'}</span>${formBadgeBench}${moraleBadgeBench}</span>
           <span class="bench-row__role">Primary: ${p.roleBias.primaryRoleBias}</span>
           <span class="bench-row__role bench-row__role--sec">Secondary: ${p.roleBias.secondaryRoleBias}</span>
           <span class="${contractClass}">${years}y · $${salary.toLocaleString()}/mo</span>
           ${badge ? '<span class="bench-badge">' + badge + '</span>' : ''}
+          ${injBadgeBench ? '<span class="bench-injury">' + injBadgeBench + '</span>' : ''}
           <span class="bench-row__actions">
             <button type="button" class="btn btn--offer-contract" data-player-index="${playerIdx}">Renew</button>
             <button type="button" class="btn btn--small btn--add-to-starters" data-player-index="${playerIdx}">Add to starters</button>
@@ -5703,12 +7539,16 @@ function initUI() {
           const salary = p.salary != null ? p.salary : 5000;
           const isFinalYear = years === 1;
           const contractClass = isFinalYear ? 'player-contract-info player-contract-info--final' : 'player-contract-info';
+          const injBadgeReserve = getInjuryBadgeHTML(p);
+          const formBadgeReserve = getFormBadgeHTML(p);
+          const moraleBadgeReserve = getMoraleBadgeHTML(p);
           row.innerHTML = `
-            <span class="reserve-row__name">${getPlayerDisplayName(p)} <span class="age-badge ${getAgePhaseClass(p.age)}">${p.age != null ? p.age : '?'}</span></span>
+            <span class="reserve-row__name">${getPlayerDisplayName(p)} <span class="age-badge ${getAgePhaseClass(p.age)}">${p.age != null ? p.age : '?'}</span>${formBadgeReserve}${moraleBadgeReserve}</span>
             <span class="reserve-row__role">Primary: ${p.roleBias.primaryRoleBias}</span>
             <span class="reserve-row__role reserve-row__role--sec">Secondary: ${p.roleBias.secondaryRoleBias}</span>
             <span class="${contractClass}">${years}y · $${salary.toLocaleString()}/mo</span>
             ${badge ? '<span class="reserve-badge">' + badge + '</span>' : ''}
+            ${injBadgeReserve ? '<span class="reserve-injury">' + injBadgeReserve + '</span>' : ''}
             <span class="reserve-row__actions">
               <button type="button" class="btn btn--offer-contract" data-player-index="${playerIdx}">Renew</button>
               <button type="button" class="btn btn--small btn--add-to-bench" data-player-index="${playerIdx}">Add to bench</button>
@@ -5752,8 +7592,15 @@ function initUI() {
     const moveToBenchBtn = document.getElementById('playerDetailMoveToBench');
     const moveToStarterBtn = document.getElementById('playerDetailMoveToStarter');
     const offerContractBtn = document.getElementById('playerDetailOfferContract');
+    const transferListBtn = document.getElementById('playerDetailTransferList');
     const sellBtn = document.getElementById('playerDetailSell');
     const closeBtn = document.getElementById('playerDetailClose');
+    const moraleSection = document.getElementById('playerDetailMoraleSection');
+    const moraleBarEl = document.getElementById('playerDetailMoraleBar');
+    const moraleLabelEl = document.getElementById('playerDetailMoraleLabel');
+    const injurySection = document.getElementById('playerDetailInjurySection');
+    const injuryStatusEl = document.getElementById('playerDetailInjuryStatus');
+    const clinicBtn = document.getElementById('playerDetailClinicVisit');
     const rosterPage = document.querySelector('[data-page="roster"]');
     if (!modal || !nameEl || !statsEl || !rosterPage) return;
 
@@ -5778,6 +7625,44 @@ function initUI() {
       contractEl.textContent = years + ' year(s) left · $' + salary.toLocaleString() + '/mo';
       moveToBenchBtn.style.display = (inStarters || inReserves) ? 'inline-block' : 'none';
       moveToStarterBtn.style.display = inBench ? 'inline-block' : 'none';
+
+      // Morale section
+      if (moraleBarEl && moraleLabelEl) {
+        const m = player.morale != null ? player.morale : 70;
+        const info = Nexus.getMoraleInfo ? Nexus.getMoraleInfo(m) : { label: 'Neutral', cssClass: 'morale--neutral' };
+        moraleBarEl.style.width = m + '%';
+        moraleBarEl.className = 'morale-bar ' + info.cssClass;
+        moraleLabelEl.textContent = info.label + ' (' + Math.round(m) + ')';
+        moraleLabelEl.className = info.cssClass;
+      }
+
+      // Injury section (only shown on roster page player modal)
+      const inj = Nexus.getPlayerInjury ? Nexus.getPlayerInjury(player) : null;
+      if (injurySection && injuryStatusEl && clinicBtn) {
+        if (inj) {
+          const label = (INJURY_TYPES[inj.type] && INJURY_TYPES[inj.type].label) || inj.type;
+          const cost = (Nexus.INJURY_CLINIC_COST && Nexus.INJURY_CLINIC_COST[inj.severity]) || 0;
+          injurySection.style.display = '';
+          const sevText = inj.severity === 'Major' ? '🔴 Major' : inj.severity === 'Moderate' ? '🟠 Moderate' : '🟡 Minor';
+          injuryStatusEl.textContent = sevText + ' ' + label + ' — ' + inj.matchdaysLeft + ' matchday(s) remaining';
+          const clinicLabel = inj.severity === 'Major'
+            ? 'Send to Clinic — reduce to Moderate ($' + cost.toLocaleString() + ')'
+            : 'Send to Clinic — instant heal ($' + cost.toLocaleString() + ')';
+          clinicBtn.textContent = clinicLabel;
+          clinicBtn.style.display = 'inline-block';
+        } else {
+          injurySection.style.display = 'none';
+          clinicBtn.style.display = 'none';
+        }
+      }
+
+      // Transfer list button (roster only)
+      if (transferListBtn) {
+        const onList = player.transferListed === true;
+        transferListBtn.textContent = onList ? 'Remove from transfer list' : 'Transfer list';
+        transferListBtn.style.display = 'inline-block';
+      }
+
       modal.classList.remove('is-hidden');
       modal.setAttribute('aria-hidden', 'false');
     }
@@ -5833,6 +7718,20 @@ function initUI() {
     function movePlayerToStarter(player) {
       const yourTeam = league && league[0];
       if (!yourTeam || yourTeam !== league[0] || !Array.isArray(yourTeam.starterSlots)) return;
+
+      // Injury gate: block Major, warn Moderate
+      const inj = Nexus.getPlayerInjury ? Nexus.getPlayerInjury(player) : null;
+      if (inj && inj.severity === 'Major') {
+        const label = (INJURY_TYPES[inj.type] && INJURY_TYPES[inj.type].label) || inj.type;
+        showNotification(getPlayerDisplayName(player) + ' is out with a Major ' + label + ' injury (' + inj.matchdaysLeft + ' matchdays). Cannot start.', 'error');
+        return;
+      }
+      if (inj && inj.severity === 'Moderate') {
+        const label = (INJURY_TYPES[inj.type] && INJURY_TYPES[inj.type].label) || inj.type;
+        showNotification('Warning: ' + getPlayerDisplayName(player) + ' has a Moderate ' + label + ' injury. Playing risks aggravation to Major.', 'error', 6000);
+        // Allow anyway — player's choice
+      }
+
       ensureUserTeamSlots(yourTeam);
       const starterSlots = yourTeam.starterSlots;
       const benchSlots = yourTeam.benchSlots;
@@ -5899,12 +7798,63 @@ function initUI() {
 
     moveToBenchBtn.addEventListener('click', () => { if (detailPlayer) movePlayerToBench(detailPlayer); });
     moveToStarterBtn.addEventListener('click', () => { if (detailPlayer) movePlayerToStarter(detailPlayer); });
+    if (clinicBtn) {
+      clinicBtn.addEventListener('click', () => {
+        if (!detailPlayer) return;
+        const yourTeam = league && league[0];
+        if (!yourTeam) return;
+        const inj = Nexus.getPlayerInjury ? Nexus.getPlayerInjury(detailPlayer) : null;
+        if (!inj) return;
+        const cost = (Nexus.INJURY_CLINIC_COST && Nexus.INJURY_CLINIC_COST[inj.severity]) || 0;
+        const name = getPlayerDisplayName(detailPlayer);
+        const msg = inj.severity === 'Major'
+          ? 'Send ' + name + ' to clinic? Cost: $' + cost.toLocaleString() + '. Reduces injury to Moderate (3 matchdays).'
+          : 'Send ' + name + ' to clinic for instant recovery? Cost: $' + cost.toLocaleString() + '.';
+        showConfirm(msg, () => {
+          const result = Nexus.applyClinicVisit(detailPlayer, yourTeam);
+          if (result && result.success) {
+            showNotification(result.message, 'success');
+            if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'success', icon: '🏥', title: getPlayerDisplayName(detailPlayer) + ' — Clinic visit', body: result.message || 'Clinic visit successful.', actionRoute: 'roster', actionLabel: 'Roster' });
+            if (typeof updateFinanceUI === 'function') updateFinanceUI(yourTeam);
+            closeDetailModal();
+            updateRosterUI();
+          } else {
+            showNotification((result && result.message) || 'Clinic visit failed.', 'error');
+            if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'error', icon: '🏥', title: getPlayerDisplayName(detailPlayer) + ' — Clinic', body: (result && result.message) || 'Clinic visit failed.', actionRoute: 'roster', actionLabel: 'Roster' });
+          }
+        });
+      });
+    }
     offerContractBtn.addEventListener('click', () => {
       if (!detailPlayer) return;
       const playerToOffer = detailPlayer;
       closeDetailModal();
       document.dispatchEvent(new CustomEvent('nexus:openContractOffer', { detail: { player: playerToOffer } }));
     });
+    if (transferListBtn) {
+      transferListBtn.addEventListener('click', () => {
+        if (!detailPlayer) return;
+        const yourTeam = league && league[0];
+        if (!yourTeam || !season || !season.inbox) return;
+        const p = detailPlayer;
+        const name = getPlayerDisplayName(p);
+        if (p.transferListed === true) {
+          p.transferListed = false;
+          showNotification(name + ' removed from transfer list.', 'info');
+          if (typeof updateRosterUI === 'function') updateRosterUI();
+          closeDetailModal();
+          return;
+        }
+        showConfirm('Put ' + name + ' on the transfer list? Other clubs can make offers. You can remove them later.', () => {
+          p.transferListed = true;
+          showNotification(name + ' added to transfer list.', 'info');
+          if (typeof triggerPlayerChat === 'function') triggerPlayerChat(season, p, 'transfer_listed');
+          if (typeof updateInboxBadge === 'function') updateInboxBadge();
+          if (typeof updateRosterUI === 'function') updateRosterUI();
+          closeDetailModal();
+        });
+      });
+    }
     sellBtn.addEventListener('click', () => {
       if (!detailPlayer) return;
       const yourTeam = league && league[0];
@@ -5919,6 +7869,7 @@ function initUI() {
           if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
           updateRosterUI();
           showNotification(result.message || ('Sold ' + name), 'success');
+          if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '💰', title: 'Sold ' + name, body: result.message || ('Sold ' + name), actionRoute: 'roster', actionLabel: 'Roster' });
         } else {
           showNotification(result && result.message ? result.message : 'Could not sell player.', 'error');
         }
@@ -6062,6 +8013,8 @@ function initUI() {
         if (result.success) {
           closeMarketModal();
           showNotification(result.message || 'Player signed.', 'success');
+          if (seasonData && seasonData.inbox && typeof addMail === 'function') addMail(seasonData, { type: 'info', icon: '✍', title: 'Player signed', body: result.message || ('Signed ' + getPlayerDisplayName(listing.player)), actionRoute: 'roster', actionLabel: 'Roster' });
+          if (typeof triggerPlayerChat === 'function' && seasonData && seasonData.inbox && listing.player) triggerPlayerChat(seasonData, listing.player, 'new_signing');
           if (seasonData && seasonData.transferMarket) seasonData.transferMarket = seasonData.transferMarket.filter(e => e !== listing);
           if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
           if (typeof updateRosterUI === 'function') updateRosterUI();
@@ -6083,6 +8036,8 @@ function initUI() {
         if (result.success) {
           closeMarketModal();
           showNotification(result.message || 'Player signed from club.', 'success');
+          if (seasonData && seasonData.inbox && typeof addMail === 'function') addMail(seasonData, { type: 'info', icon: '✍', title: 'Player signed from club', body: result.message || ('Signed ' + getPlayerDisplayName(player)), actionRoute: 'roster', actionLabel: 'Roster' });
+          if (typeof triggerPlayerChat === 'function' && seasonData && seasonData.inbox && player) triggerPlayerChat(seasonData, player, 'new_signing');
           if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
           if (typeof updateRosterUI === 'function') updateRosterUI();
           if (typeof updateStandingsUI === 'function' && seasonData) updateStandingsUI(seasonData);
@@ -6097,6 +8052,8 @@ function initUI() {
         if (result.success) {
           closeMarketModal();
           showNotification(result.message || 'Free agent signed.', 'success');
+          if (seasonData && seasonData.inbox && typeof addMail === 'function') addMail(seasonData, { type: 'info', icon: '✍', title: 'Free agent signed', body: result.message || ('Signed ' + getPlayerDisplayName(player)), actionRoute: 'roster', actionLabel: 'Roster' });
+          if (typeof triggerPlayerChat === 'function' && seasonData && seasonData.inbox && player) triggerPlayerChat(seasonData, player, 'new_signing');
           if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
           if (typeof updateRosterUI === 'function') updateRosterUI();
           renderTransferMarket(seasonData, userTeamRef());
@@ -6232,6 +8189,8 @@ function initUI() {
       const result = Nexus.promoteYouthToRoster(currentUserTeam, currentProspect);
       if (result.success) {
         showNotification(result.message || 'Promoted to roster', 'success');
+        if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '🌟', title: 'Promoted to roster', body: getPlayerDisplayName(currentProspect) + ' was promoted from the academy.', actionRoute: 'roster', actionLabel: 'Roster' });
+        if (typeof triggerPlayerChat === 'function' && season && season.inbox) triggerPlayerChat(season, currentProspect, 'youth_promoted');
         closeYouthModal();
         updateYouthAcademyUI(userTeamRef());
         if (typeof updateRosterUI === 'function') updateRosterUI();
@@ -6245,6 +8204,8 @@ function initUI() {
       const prospect = currentProspect;
       const idx = (team.youthAcademy || []).indexOf(prospect);
       if (idx >= 0) team.youthAcademy.splice(idx, 1);
+      if (typeof triggerPlayerChat === 'function' && season && season.inbox) triggerPlayerChat(season, prospect, 'youth_released');
+      if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '👋', title: 'Released from academy', body: getPlayerDisplayName(prospect) + ' was released from the youth academy.' + (age <= 17 ? ' (back to youth market)' : ''), actionRoute: 'market', actionLabel: 'Market' });
       const age = prospect.age != null ? prospect.age : 0;
       if (age <= 17) {
         (window.Nexus.YOUTH_MARKET = window.Nexus.YOUTH_MARKET || []).push(prospect);
@@ -6479,6 +8440,8 @@ function initUI() {
         const result = Nexus.signYouthToAcademy(userTeam, prospect);
         if (result.success) {
           showNotification(result.message || 'Signed to academy', 'success');
+          if (season && season.inbox && typeof addMail === 'function') addMail(season, { type: 'info', icon: '📚', title: 'Signed to academy', body: getPlayerDisplayName(prospect) + ' joined the youth academy.', actionRoute: 'market', actionLabel: 'Market' });
+          if (typeof triggerPlayerChat === 'function' && season && season.inbox) triggerPlayerChat(season, prospect, 'signed_to_academy');
           updateYouthAcademyUI(userTeamRef());
           if (typeof updateFinanceUI === 'function') updateFinanceUI(userTeamRef());
         } else showNotification(result.message || 'Sign failed', 'error');
@@ -6738,6 +8701,228 @@ function initUI() {
         container.appendChild(row);
       });
     });
+  }
+
+  // =====================================================================
+  // INBOX UI — defined inside initUI to access season/league closure vars
+  // =====================================================================
+
+  window.Nexus.onOpponentBootcampActivated = function(aiTeamName, bootcampName) {
+    if (!season || !season.inbox || typeof addMail !== 'function') return;
+    addMail(season, {
+      type: 'info',
+      icon: '🏕',
+      title: aiTeamName + ' activated ' + bootcampName,
+      body: aiTeamName + ' activated ' + bootcampName + ' before facing you. You can set your own bootcamp in Operations.',
+      actionRoute: 'operations',
+      actionTab: 'bootcamp',
+      actionLabel: 'Go to Bootcamp'
+    });
+  };
+
+  function updateInboxBadge() {
+    if (!season || !season.inbox) return;
+    const mailUnread = season.inbox.mails.filter(function(m) { return !m.read; }).length;
+    const chatUnread = season.inbox.chats.filter(function(c) { return c.unread; }).length;
+    const mailBadgeEl = document.getElementById('inboxMailUnread');
+    const chatBadgeEl = document.getElementById('inboxChatUnread');
+    const navBadgeEl  = document.getElementById('inboxNavBadge');
+    if (mailBadgeEl) { mailBadgeEl.textContent = mailUnread || ''; mailBadgeEl.style.display = mailUnread ? '' : 'none'; }
+    if (chatBadgeEl) { chatBadgeEl.textContent = chatUnread || ''; chatBadgeEl.style.display = chatUnread ? '' : 'none'; }
+    const total = mailUnread + chatUnread;
+    if (navBadgeEl)  { navBadgeEl.textContent  = total || '';      navBadgeEl.style.display  = total      ? '' : 'none'; }
+  }
+
+  function renderMailList() {
+    const listEl   = document.getElementById('inboxMailList');
+    const viewerEl = document.getElementById('inboxMailViewer');
+    if (!listEl || !viewerEl || !season || !season.inbox) return;
+    const mails = season.inbox.mails;
+    if (!mails.length) {
+      listEl.innerHTML   = '<p class="inbox-empty-list">No messages yet.</p>';
+      viewerEl.innerHTML = '<div class="inbox-placeholder"><p>Your mailbox is empty.</p></div>';
+      return;
+    }
+    listEl.innerHTML = mails.map(function(m, i) {
+      return '<div class="inbox-list-item' + (m.read ? '' : ' is-unread') + '" data-mail-idx="' + i + '">' +
+        '<span class="inbox-list-icon">' + m.icon + '</span>' +
+        '<div class="inbox-list-meta">' +
+          '<div class="inbox-list-title">' + m.title + '</div>' +
+          '<div class="inbox-list-sub">MD ' + (m.matchday + 1) + '</div>' +
+        '</div>' +
+        (m.read ? '' : '<span class="inbox-unread-dot"></span>') +
+      '</div>';
+    }).join('');
+    listEl.querySelectorAll('.inbox-list-item').forEach(function(el) {
+      el.addEventListener('click', function() {
+        listEl.querySelectorAll('.inbox-list-item').forEach(function(e) { e.classList.remove('is-selected'); });
+        el.classList.add('is-selected');
+        const mail = season.inbox.mails[parseInt(el.getAttribute('data-mail-idx'), 10)];
+        if (!mail) return;
+        mail.read = true;
+        el.classList.remove('is-unread');
+        const dot = el.querySelector('.inbox-unread-dot');
+        if (dot) dot.remove();
+        updateInboxBadge();
+        let bodyHtml = mail.body;
+        let actionHtml = '';
+        if (mail.offers && Array.isArray(mail.offers) && mail.offers.length) {
+          bodyHtml = '<p>You have job offers from the following teams. Click <strong>Negotiate</strong> to view or accept an offer.</p>' +
+            '<div class="inbox-job-offers">' + mail.offers.map(function(off, idx) {
+              return '<div class="inbox-job-offer-row">' +
+                '<span class="inbox-job-offer-name">' + (off.teamName || '—') + '</span>' +
+                (off.salary != null ? '<span class="inbox-job-offer-salary">$' + Number(off.salary).toLocaleString() + '/mo</span>' : '') +
+                '<button type="button" class="btn btn--primary inbox-mail-action inbox-job-offer-btn" data-offer-index="' + idx + '">Negotiate</button>' +
+                '</div>';
+            }).join('') + '</div>';
+        } else if (mail.actionRoute) {
+          actionHtml = '<button class="btn btn--primary inbox-mail-action" data-route="' + mail.actionRoute + '"' + (mail.actionTab ? ' data-tab="' + mail.actionTab + '"' : '') + '>' + (mail.actionLabel || 'View') + '</button>';
+        }
+        viewerEl.innerHTML =
+          '<div class="inbox-mail-view">' +
+            '<div class="inbox-mail-view__header">' +
+              '<span class="inbox-mail-view__icon">' + mail.icon + '</span>' +
+              '<div>' +
+                '<div class="inbox-mail-view__title">' + mail.title + '</div>' +
+                '<div class="inbox-mail-view__meta">Matchday ' + (mail.matchday + 1) + '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="inbox-mail-view__body">' + bodyHtml + '</div>' +
+            actionHtml +
+          '</div>';
+        viewerEl.querySelectorAll('.inbox-mail-action[data-route]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            const route = btn.getAttribute('data-route');
+            const tab = btn.getAttribute('data-tab');
+            const navBtn = document.querySelector('.menu__item[data-route="' + route + '"]');
+            if (navBtn) navBtn.click();
+            if (tab && route === 'operations') {
+              const tabBtn = document.querySelector('.operations-tab[data-operations-tab="' + tab + '"]');
+              if (tabBtn) tabBtn.click();
+            }
+          });
+        });
+        viewerEl.querySelectorAll('.inbox-job-offer-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            if (!mail.offers || !mail.offers.length) return;
+            const idx = parseInt(btn.getAttribute('data-offer-index'), 10);
+            const off = mail.offers[idx];
+            if (!off) return;
+            const allTeams = [].concat(league || [], challengerLeague || []);
+            const team = allTeams.find(function(t) { return t && t.name === off.teamName; });
+            if (!team) {
+              showNotification('That team is no longer available.', 'info');
+              return;
+            }
+            currentJobOffers = [{ team: team, salary: off.salary, reason: off.reason }];
+            renderJobOffers(currentJobOffers, userTeamRef());
+            const jobModal = document.getElementById('jobOffersModal');
+            if (jobModal) jobModal.style.display = 'flex';
+          });
+        });
+      });
+    });
+  }
+
+  function renderChatThread(thread, viewerEl) {
+    if (!thread || !viewerEl) return;
+    function buildThread() {
+      const lastMsg   = thread.messages[thread.messages.length - 1];
+      const hasOptions = lastMsg && lastMsg.from === 'player' && lastMsg.options && lastMsg.options.length && !thread.resolved;
+      const messagesHtml = thread.messages.map(function(msg) {
+        const cls    = msg.from === 'player' ? 'inbox-msg inbox-msg--player' : 'inbox-msg inbox-msg--manager';
+        const sender = msg.from === 'player' ? thread.playerName : 'You';
+        return '<div class="' + cls + '"><div class="inbox-msg__sender">' + sender + ' · MD ' + (msg.matchday + 1) + '</div><div class="inbox-msg__text">' + msg.text + '</div></div>';
+      }).join('');
+      const optionsHtml = hasOptions
+        ? '<div class="inbox-options">' + lastMsg.options.map(function(opt, i) {
+            return '<button class="btn btn--secondary inbox-option-btn" data-option="' + i + '">' + opt.label + '</button>';
+          }).join('') + '</div>'
+        : (thread.resolved ? '<div class="inbox-resolved-banner">Conversation resolved.</div>' : '');
+      viewerEl.innerHTML =
+        '<div class="inbox-chat-view">' +
+          '<div class="inbox-chat-view__header"><span class="inbox-list-icon">' + thread.icon + '</span><strong>' + thread.playerName + '</strong></div>' +
+          '<div class="inbox-chat-messages" id="inboxChatMessages">' + messagesHtml + '</div>' +
+          optionsHtml +
+        '</div>';
+      const msgsEl = viewerEl.querySelector('#inboxChatMessages');
+      if (msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
+      viewerEl.querySelectorAll('.inbox-option-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          applyChatOption(season, thread.playerId, parseInt(btn.getAttribute('data-option'), 10));
+          renderChatList();
+          const newIdx = season.inbox.chats.indexOf(thread);
+          if (newIdx >= 0) {
+            const item = document.querySelector('[data-chat-idx="' + newIdx + '"]');
+            if (item) { item.classList.add('is-selected'); }
+          }
+          buildThread();
+        });
+      });
+    }
+    buildThread();
+  }
+
+  function renderChatList() {
+    const listEl   = document.getElementById('inboxChatList');
+    const viewerEl = document.getElementById('inboxChatViewer');
+    if (!listEl || !viewerEl || !season || !season.inbox) return;
+    const chats = season.inbox.chats;
+    if (!chats.length) {
+      listEl.innerHTML   = '<p class="inbox-empty-list">No conversations yet.</p>';
+      viewerEl.innerHTML = '<div class="inbox-placeholder"><p>No player conversations this season.</p></div>';
+      return;
+    }
+    listEl.innerHTML = chats.map(function(c, i) {
+      const lastMsg = c.messages[c.messages.length - 1];
+      const preview = lastMsg ? lastMsg.text.replace(/"/g, '').substring(0, 55) + '…' : '';
+      return '<div class="inbox-list-item' + (c.unread ? ' is-unread' : '') + (c.resolved ? ' is-resolved' : '') + '" data-chat-idx="' + i + '">' +
+        '<span class="inbox-list-icon">' + c.icon + '</span>' +
+        '<div class="inbox-list-meta">' +
+          '<div class="inbox-list-title">' + c.playerName + (c.resolved ? ' <span class="inbox-resolved-tag">Resolved</span>' : '') + '</div>' +
+          '<div class="inbox-list-sub">' + preview + '</div>' +
+        '</div>' +
+        (c.unread ? '<span class="inbox-unread-dot"></span>' : '') +
+      '</div>';
+    }).join('');
+    listEl.querySelectorAll('.inbox-list-item').forEach(function(el) {
+      el.addEventListener('click', function() {
+        listEl.querySelectorAll('.inbox-list-item').forEach(function(e) { e.classList.remove('is-selected'); });
+        el.classList.add('is-selected');
+        const thread = season.inbox.chats[parseInt(el.getAttribute('data-chat-idx'), 10)];
+        if (!thread) return;
+        thread.unread = false;
+        el.classList.remove('is-unread');
+        const dot = el.querySelector('.inbox-unread-dot');
+        if (dot) dot.remove();
+        updateInboxBadge();
+        renderChatThread(thread, viewerEl);
+      });
+    });
+  }
+
+  function updateInboxUI() {
+    if (!season || !season.inbox) return;
+    updateInboxBadge();
+    const mailTabBtn  = document.getElementById('inboxTabMails');
+    const chatTabBtn  = document.getElementById('inboxTabChats');
+    const mailsPanel  = document.getElementById('inboxMailsPanel');
+    const chatsPanel  = document.getElementById('inboxChatsPanel');
+    if (!mailTabBtn || !chatTabBtn || !mailsPanel || !chatsPanel) return;
+    const showMails = function() {
+      mailsPanel.style.display = ''; chatsPanel.style.display = 'none';
+      mailTabBtn.classList.add('is-active'); chatTabBtn.classList.remove('is-active');
+      renderMailList();
+    };
+    const showChats = function() {
+      chatsPanel.style.display = ''; mailsPanel.style.display = 'none';
+      chatTabBtn.classList.add('is-active'); mailTabBtn.classList.remove('is-active');
+      renderChatList();
+    };
+    mailTabBtn.onclick = showMails;
+    chatTabBtn.onclick = showChats;
+    // Keep current tab active, default to mails
+    if (chatsPanel.style.display === '') { showChats(); } else { showMails(); }
   }
 
   // ===== INITIAL RENDER =====
