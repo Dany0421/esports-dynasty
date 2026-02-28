@@ -1831,7 +1831,7 @@ function getMatchDecisionFixture(season, userTeam) {
   if (phase === 'regular') {
     const days = season.matchdays || season.schedule || [];
     const md = season.currentMatchday || 0;
-    const dayMatches = days[md] || [];
+    const dayMatches = normalizeMatchdayMatches(days[md]);
     const userMatch = dayMatches.find(includesUser);
     if (!userMatch) return null;
     return {
@@ -2711,6 +2711,12 @@ function generateMatchdays(teams) {
   return matchdays;
 }
 
+function normalizeMatchdayMatches(dayEntry) {
+  if (Array.isArray(dayEntry)) return dayEntry.filter(Boolean);
+  if (dayEntry && Array.isArray(dayEntry.matches)) return dayEntry.matches.filter(Boolean);
+  return [];
+}
+
 // PART 2 — SEASON MODEL UPDATE
 
 function createSeason(teams) {
@@ -2803,7 +2809,7 @@ function playNextMatchday(season, environmentMap, meta) {
   }
 
   const playedMatchdayIndex = season.currentMatchday;
-  const todayMatches = season.matchdays[season.currentMatchday];
+  const todayMatches = normalizeMatchdayMatches((season.matchdays || [])[season.currentMatchday]);
   const results = [];
 
   todayMatches.forEach(match => {
@@ -5116,7 +5122,7 @@ function buildSeasonSnapshot(season) {
     currentMatchday: season.currentMatchday,
     standings: season.standings,
     matchdays: (season.matchdays || []).map(day =>
-      day.map(m => ({ teamA: m.teamA.name, teamB: m.teamB.name, map: m.map }))
+      normalizeMatchdayMatches(day).map(m => ({ teamA: m.teamA.name, teamB: m.teamB.name, map: m.map }))
     ),
     playedMatchResults: (season.playedMatchResults || []).map(day =>
       (day || []).map(r => ({
@@ -5158,7 +5164,7 @@ function restoreSeasonFromSnapshot(snap, mainTeams, challengerLeague) {
   const findTeam = name => allTeams.find(t => t.name === name);
 
   const matchdays = (snap.matchdays || []).map(day =>
-    day.map(m => ({
+    normalizeMatchdayMatches(day).map(m => ({
       teamA: findTeam(m.teamA),
       teamB: findTeam(m.teamB),
       map: m.map
@@ -5223,7 +5229,7 @@ function restoreChallengerSeasonFromSnapshot(snap, challengerTeams) {
   if (!snap || !challengerTeams || challengerTeams.length === 0) return null;
   const findTeam = name => challengerTeams.find(t => t.name === name);
   const matchdays = (snap.matchdays || []).map(day =>
-    day.map(m => ({
+    normalizeMatchdayMatches(day).map(m => ({
       teamA: findTeam(m.teamA),
       teamB: findTeam(m.teamB),
       map: m.map
@@ -6144,6 +6150,7 @@ function initUI() {
     optionsEl.innerHTML = '';
 
     const userTeam = userTeamRef();
+    let enabledCount = 0;
     eventData.event.options.forEach(function(opt) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -6155,6 +6162,8 @@ function initUI() {
       if (!canAfford) {
         btn.disabled = true;
         btn.classList.add('is-disabled');
+      } else {
+        enabledCount++;
       }
       btn.addEventListener('click', function() {
         if (btn.disabled) return;
@@ -6164,6 +6173,19 @@ function initUI() {
       });
       optionsEl.appendChild(btn);
     });
+
+    if (enabledCount === 0) {
+      const fallbackBtn = document.createElement('button');
+      fallbackBtn.type = 'button';
+      fallbackBtn.className = 'match-decision-option';
+      fallbackBtn.innerHTML = '<div class="match-decision-option__label">Continue without changes</div><div class="match-decision-option__desc">No eligible decision option is available right now.</div>';
+      fallbackBtn.addEventListener('click', function() {
+        modal.style.display = 'none';
+        modal.setAttribute('aria-hidden', 'true');
+        onChoice({});
+      });
+      optionsEl.appendChild(fallbackBtn);
+    }
 
     modal.style.display = 'flex';
     modal.setAttribute('aria-hidden', 'false');
@@ -6456,17 +6478,34 @@ function initUI() {
         runPostStageUpdates();
       }
 
-      const _userT = userTeamRef ? userTeamRef() : (league && league[0]);
-      const userIsPlaying = !!(season && _userT && getMatchDecisionFixture(season, _userT));
-      const decisionEvent = userIsPlaying && _userT ? pickMatchDecisionEvent(season, _userT) : null;
+      function safeDoSim() {
+        try {
+          doSim();
+        } catch (err) {
+          console.error('Simulate stage failed:', err);
+          if (typeof showNotification === 'function') {
+            showNotification('Simulation failed due to an unexpected error. Please try again.', 'error', 7000);
+          }
+        }
+      }
+
+      let _userT = null;
+      let decisionEvent = null;
+      try {
+        _userT = userTeamRef ? userTeamRef() : (league && league[0]);
+        const userIsPlaying = !!(season && _userT && getMatchDecisionFixture(season, _userT));
+        decisionEvent = userIsPlaying && _userT ? pickMatchDecisionEvent(season, _userT) : null;
+      } catch (err) {
+        console.error('Match decision pre-check failed; continuing without event:', err);
+      }
 
       if (decisionEvent) {
         showMatchDecisionModal(decisionEvent, function(effect) {
           if (effect) applyMatchDecisionEffect(season, _userT, effect);
-          doSim();
+          safeDoSim();
         });
       } else {
-        doSim();
+        safeDoSim();
       }
     });
   }
@@ -6804,7 +6843,7 @@ function initUI() {
         targetSeason = challengerSeason;
       }
       const md = targetSeason.currentMatchday || 0;
-      const matches = (targetSeason.matchdays || [])[md] || [];
+      const matches = normalizeMatchdayMatches((targetSeason.matchdays || [])[md]);
       const ourMatch = matches.find(function(m) {
         return m && m.teamA && m.teamB && (m.teamA.name === userTeam.name || m.teamB.name === userTeam.name);
       });
@@ -7040,7 +7079,7 @@ function initUI() {
       return;
     }
 
-    const todayMatches = (dataForFixture.matchdays || [])[dataForFixture.currentMatchday] || [];
+    const todayMatches = normalizeMatchdayMatches((dataForFixture.matchdays || [])[dataForFixture.currentMatchday]);
     const ourMatch = todayMatches.find(m =>
       m.teamA.name === userTeam.name || m.teamB.name === userTeam.name
     );
@@ -8720,7 +8759,8 @@ function initUI() {
       return;
     }
 
-    (seasonData.matchdays || []).forEach((dayMatches, dayIndex) => {
+    (seasonData.matchdays || []).forEach((dayMatchesRaw, dayIndex) => {
+      const dayMatches = normalizeMatchdayMatches(dayMatchesRaw);
       const played = dayIndex < seasonData.currentMatchday;
       const isNext = dayIndex === seasonData.currentMatchday;
       const dayResults = (seasonData.playedMatchResults || [])[dayIndex] || [];
@@ -8755,7 +8795,8 @@ function initUI() {
     chHeader.style.marginTop = '1rem';
     chHeader.textContent = 'Challenger League Schedule';
     container.appendChild(chHeader);
-    challengerSeason.matchdays.forEach((dayMatches, dayIndex) => {
+    challengerSeason.matchdays.forEach((dayMatchesRaw, dayIndex) => {
+      const dayMatches = normalizeMatchdayMatches(dayMatchesRaw);
       const played = dayIndex < challengerSeason.currentMatchday;
       const isNext = dayIndex === challengerSeason.currentMatchday;
       const dayResults = (challengerSeason.playedMatchResults || [])[dayIndex] || [];
