@@ -2802,6 +2802,7 @@ function playNextMatchday(season, environmentMap, meta) {
     });
   }
 
+  const playedMatchdayIndex = season.currentMatchday;
   const todayMatches = season.matchdays[season.currentMatchday];
   const results = [];
 
@@ -2850,7 +2851,7 @@ function playNextMatchday(season, environmentMap, meta) {
   processMatchdayForm(results);
 
   // Process morale: update all players across all teams
-  const moraleEvents = processMatchdayMorale(results, allTeams, environmentMap);
+  const moraleEvents = processMatchdayMorale(results, allTeams, environmentMap, season, playedMatchdayIndex);
 
   return {
     finished: false,
@@ -3203,8 +3204,18 @@ function getPsychMoraleReduction(environment) {
  * Process morale for all players on all teams after a matchday.
  * Returns array of { player, team, event } for UI notifications.
  */
-function processMatchdayMorale(matchResults, allTeams, environmentMap) {
+function processMatchdayMorale(matchResults, allTeams, environmentMap, season, playedMatchdayIndex) {
   const events = []; // morale threshold crossings to notify
+  const userTeam = (window.Nexus && typeof window.Nexus.getUserTeam === 'function')
+    ? window.Nexus.getUserTeam()
+    : (window.Nexus && window.Nexus.LEAGUE && window.Nexus.LEAGUE[0]);
+
+  function hasOpenScenarioThread(playerId, scenarioKey) {
+    if (!season || !season.inbox || !Array.isArray(season.inbox.chats)) return false;
+    return season.inbox.chats.some(function(c) {
+      return c && c.playerId === playerId && c.scenario === scenarioKey && !c.resolved;
+    });
+  }
 
   // Build set of player ids that played this matchday, and their match result
   const playedMap = new Map(); // playerId -> { won, team }
@@ -3258,6 +3269,26 @@ function processMatchdayMorale(matchResults, allTeams, environmentMap) {
         else if (lastResult === 'L') delta -= 1;
       }
 
+      // If the manager promised a starting spot for this exact matchday, enforce it.
+      const promisedStarterMatchday = player.promisedStarterMatchday;
+      const numericPromiseMatchday = promisedStarterMatchday != null ? Number(promisedStarterMatchday) : null;
+      if (
+        userTeam &&
+        team === userTeam &&
+        Number.isFinite(numericPromiseMatchday) &&
+        playedMatchdayIndex != null &&
+        playedMatchdayIndex >= numericPromiseMatchday
+      ) {
+        if (playedMatchdayIndex === numericPromiseMatchday && played) {
+          delta += 2; // extra morale bump for keeping your word and actually fielding him
+          events.push({ player, team, gameTimePromiseKept: true });
+        } else {
+          delta -= 8; // sharp morale hit when the promise is broken
+          events.push({ player, team, gameTimePromiseBroken: true });
+        }
+        player.promisedStarterMatchday = null;
+      }
+
       // Salary vs market value
       const market = getMarketSalaryForPlayer(player);
       const sal = player.salary || 5000;
@@ -3302,8 +3333,21 @@ function processMatchdayMorale(matchResults, allTeams, environmentMap) {
         }
       }
 
-      // Morale-driven transfer request
-      if (newMorale < 35 && !player.transferListed) {
+      // Player asks for more minutes only when morale falls below 45 (but not transfer-zone yet)
+      const crossedBelowGameTimeThreshold = prevMorale >= 45 && newMorale < 45 && newMorale >= 30;
+      if (
+        crossedBelowGameTimeThreshold &&
+        userTeam &&
+        team === userTeam &&
+        !played &&
+        !hasOpenScenarioThread(player.id, 'more_game_time_request')
+      ) {
+        events.push({ player, team, moreGameTimeRequest: true, newLabel });
+      }
+
+      // Morale-driven transfer request (only when morale falls below 30)
+      const crossedBelowTransferThreshold = prevMorale >= 30 && newMorale < 30;
+      if (crossedBelowTransferThreshold && !player.transferListed) {
         player.transferListed = true;
         events.push({ player, team, transferRequest: true, newLabel });
       }
@@ -3342,6 +3386,17 @@ const CHAT_SCENARIOS = {
     options: [
       { label: "We\'ll offer a new contract soon", moraleDelta: 5, managerReply: 'You have my word. We\'ll sit down and sort something out.', resolved: true },
       { label: 'Your performances will decide your future', moraleDelta: 0, managerReply: 'Show us what you can do and we\'ll take care of the rest.', resolved: true }
+    ]
+  },
+  more_game_time_request: {
+    icon: '🕒',
+    getOpening: function() {
+      return '"Coach, I need more game time. I can do more for this team if you trust me with a starting spot."';
+    },
+    options: [
+      { label: "You\'re right — you start next matchday", moraleDelta: 7, promiseStarter: true, managerReply: 'Understood. You will start in the next matchday, so be ready.', resolved: true },
+      { label: "Keep pushing, your minutes will come soon", moraleDelta: 3, managerReply: 'Stay focused and keep training hard. You\'re close to earning more time.', resolved: true },
+      { label: 'No promises right now — lineup stays by merit', moraleDelta: -7, managerReply: 'I need to keep competition high. Keep proving yourself and your role will grow.', resolved: true }
     ]
   },
   contract_expiring: {
@@ -3532,6 +3587,9 @@ function applyChatOption(season, playerId, optionIndex) {
   if (player) {
     if (option.moraleDelta) player.morale = Math.max(0, Math.min(100, (player.morale || 70) + option.moraleDelta));
     if (option.transferList) player.transferListed = true;
+    if (option.promiseStarter) {
+      player.promisedStarterMatchday = season.currentMatchday != null ? season.currentMatchday : 0;
+    }
     if (option.clinic && player.injury && window.Nexus.applyClinicVisit && userTeam && userTeam.finance) {
       const cost = (window.Nexus.INJURY_CLINIC_COST || {})[player.injury.severity] || 35000;
       if ((userTeam.finance.capital || 0) >= cost) window.Nexus.applyClinicVisit(userTeam, player);
@@ -6232,7 +6290,28 @@ function initUI() {
           const userTeamForMorale = league && league[0];
           result.moraleEvents.forEach(ev => {
             if (!userTeamForMorale || ev.team !== userTeamForMorale) return;
-            if (ev.transferRequest) {
+            if (ev.gameTimePromiseBroken) {
+              showNotification('😠 ' + getPlayerDisplayName(ev.player) + ' is upset because you promised a start and did not play him.', 'error', 8000);
+              addMail(season, {
+                type: 'morale', icon: '😠',
+                title: getPlayerDisplayName(ev.player) + ' — Promise Broken',
+                body: 'You promised ' + getPlayerDisplayName(ev.player) + ' a starting spot this matchday, but he did not play. Morale took a major hit.',
+                matchday: (season.currentMatchday || 1) - 1,
+                actionRoute: 'roster', actionLabel: 'Go to Roster'
+              });
+            } else if (ev.gameTimePromiseKept) {
+              showNotification('✅ ' + getPlayerDisplayName(ev.player) + ' got his promised start and morale improved.', 'success', 5500);
+            } else if (ev.moreGameTimeRequest) {
+              showNotification('💬 ' + getPlayerDisplayName(ev.player) + ' wants more game time.', 'error', 7000);
+              addMail(season, {
+                type: 'morale', icon: '💬',
+                title: getPlayerDisplayName(ev.player) + ' — Wants More Game Time',
+                body: getPlayerDisplayName(ev.player) + ' asked for more minutes and is pushing for a starter opportunity.',
+                matchday: (season.currentMatchday || 1) - 1,
+                actionRoute: 'inbox', actionLabel: 'Open Inbox'
+              });
+              triggerPlayerChat(season, ev.player, 'more_game_time_request');
+            } else if (ev.transferRequest) {
               const label = ev.newLabel || 'Unhappy';
               showNotification('😤 ' + getPlayerDisplayName(ev.player) + ' is ' + label + ' and has requested a transfer.', 'error', 8000);
               addMail(season, {
