@@ -774,6 +774,12 @@ body {
 .career-past-champ { margin-top: 0.5rem; font-size: 0.85rem; color: #8a9ba8; }
 .career-past-card--clickable { cursor: pointer; }
 .career-past-card--clickable:hover { background: #162028; border-color: #2a3640; }
+
+.career-hof { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #1a252e; }
+.career-hof h3 { font-size: 1rem; margin-bottom: 0.25rem; color: #8a9ba8; }
+.career-hof-desc { font-size: 0.85rem; color: #6b7c89; margin-bottom: 0.5rem; }
+.career-hof-status { font-weight: 500; color: #e4e8ec; }
+.career-hof-status--eligible { color: #d4a84b; font-weight: 600; }
 .past-season-detail-modal {
   background: #1e293b;
   border: 1px solid #334155;
@@ -2385,6 +2391,47 @@ body {
 .inbox-job-offer-salary { font-size: 0.85rem; color: #4a6272; }
 .inbox-job-offer-btn { flex-shrink: 0; }
 
+/* Team of the Season mail cards */
+.inbox-tos-intro { margin-bottom: 1rem; color: #9bb8cc; }
+.inbox-tos-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+.inbox-tos-cards.inbox-awards-single {
+  grid-template-columns: 1fr;
+  max-width: 280px;
+}
+.inbox-tos-card {
+  background: #122030;
+  border: 1px solid #1e2d3a;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+.inbox-tos-card__name { font-weight: 700; color: #e8f4ff; font-size: 0.9rem; margin-bottom: 0.25rem; }
+.inbox-tos-card__team { font-size: 0.8rem; color: #29b6f6; margin-bottom: 0.2rem; }
+.inbox-tos-card__role { font-size: 0.78rem; color: #7a9fb0; margin-bottom: 0.2rem; }
+.inbox-tos-card__rating { font-size: 0.85rem; color: #4caf7d; font-weight: 600; }
+
+/* Season Awards combined mail */
+.inbox-awards-body {
+  max-height: 65vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 0.25rem;
+}
+.inbox-awards-section {
+  margin: 0 0 1.25rem 0;
+  color: #9bb8cc;
+  font-size: 0.9rem;
+}
+.inbox-awards-section:last-child { margin-bottom: 0; }
+.inbox-awards-coach {
+  color: #e8f4ff;
+  font-size: 1rem;
+}
+
 /* Inbox mobile tuning */
 @media (max-width: 768px) {
   .inbox-tabs-bar {
@@ -2448,6 +2495,25 @@ body {
   .inbox-msg {
     max-width: 95%;
   }
+
+  .inbox-awards-body {
+    max-height: 50dvh;
+    padding-right: 0.35rem;
+  }
+  .inbox-tos-cards {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+  .inbox-tos-cards.inbox-awards-single {
+    max-width: 100%;
+  }
+  .inbox-tos-card {
+    padding: 0.6rem 0.8rem;
+    min-width: 0;
+  }
+  .inbox-tos-card__name { font-size: 0.85rem; word-break: break-word; }
+  .inbox-tos-card__team, .inbox-tos-card__role { font-size: 0.75rem; }
+  .inbox-awards-section { margin-bottom: 1rem; font-size: 0.85rem; }
 
   .inbox-job-offer-row {
     flex-wrap: wrap;
