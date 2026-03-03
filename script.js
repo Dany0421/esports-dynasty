@@ -6180,6 +6180,23 @@ function initUI() {
   let isBankruptcyJobOffers = false;
   let pendingBankruptcyOnLoad = false;
   const userTeamRef = () => league && league[0];
+  let overlayScrollLockCount = 0;
+
+  function lockOverlayScroll() {
+    overlayScrollLockCount++;
+    if (overlayScrollLockCount === 1 && typeof document !== 'undefined') {
+      document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
+    }
+  }
+
+  function unlockOverlayScroll() {
+    overlayScrollLockCount = Math.max(0, overlayScrollLockCount - 1);
+    if (overlayScrollLockCount === 0 && typeof document !== 'undefined') {
+      document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
+    }
+  }
 
   window.Nexus.recordTransferEvent = function(ev) {
     if (ev && ev.teamName) {
@@ -7069,8 +7086,10 @@ function initUI() {
     content.classList.remove('match-result--playoffs', 'match-result--relegation');
     if (stage === 'playoffs') content.classList.add('match-result--playoffs');
     else if (stage === 'relegation') content.classList.add('match-result--relegation');
+    const wasHidden = overlay.classList.contains('is-hidden');
     overlay.classList.remove('is-hidden');
     overlay.setAttribute('aria-hidden', 'false');
+    if (wasHidden) lockOverlayScroll();
   }
 
   function hideMatchResultPage() {
@@ -7079,8 +7098,10 @@ function initUI() {
       if (document.activeElement && overlay.contains(document.activeElement)) {
         document.activeElement.blur();
       }
+      const wasVisible = !overlay.classList.contains('is-hidden');
       overlay.classList.add('is-hidden');
       overlay.setAttribute('aria-hidden', 'true');
+      if (wasVisible) unlockOverlayScroll();
     }
   }
 
@@ -7134,15 +7155,19 @@ function initUI() {
     mainBottom2El.textContent = mainBottom2Text || '—';
     challTop2El.textContent = challengerTop2Text || '—';
     winRateEl.textContent = winRateText || '—';
+    const wasHidden = overlay.classList.contains('is-hidden');
     overlay.classList.remove('is-hidden');
     overlay.setAttribute('aria-hidden', 'false');
+    if (wasHidden) lockOverlayScroll();
   }
 
   function hideSeasonStatsPage() {
     const overlay = document.getElementById('seasonStatsPage');
     if (!overlay) return;
+    const wasVisible = !overlay.classList.contains('is-hidden');
     overlay.classList.add('is-hidden');
     overlay.setAttribute('aria-hidden', 'true');
+    if (wasVisible) unlockOverlayScroll();
   }
 
   const seasonStatsContinueBtn = document.getElementById('seasonStatsContinue');
