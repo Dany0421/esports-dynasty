@@ -6181,10 +6181,17 @@ function initUI() {
   let pendingBankruptcyOnLoad = false;
   const userTeamRef = () => league && league[0];
   let overlayScrollLockCount = 0;
+  let overlayLockedScrollY = 0;
 
   function lockOverlayScroll() {
     overlayScrollLockCount++;
     if (overlayScrollLockCount === 1 && typeof document !== 'undefined') {
+      overlayLockedScrollY = window.pageYOffset || window.scrollY || 0;
+      document.body.style.position = 'fixed';
+      document.body.style.top = '-' + overlayLockedScrollY + 'px';
+      document.body.style.left = '0';
+      document.body.style.right = '0';
+      document.body.style.width = '100%';
       document.body.style.overflow = 'hidden';
       document.documentElement.style.overflow = 'hidden';
     }
@@ -6193,8 +6200,16 @@ function initUI() {
   function unlockOverlayScroll() {
     overlayScrollLockCount = Math.max(0, overlayScrollLockCount - 1);
     if (overlayScrollLockCount === 0 && typeof document !== 'undefined') {
+      document.body.style.position = '';
+      document.body.style.top = '';
+      document.body.style.left = '';
+      document.body.style.right = '';
+      document.body.style.width = '';
       document.body.style.overflow = '';
       document.documentElement.style.overflow = '';
+      if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+        window.scrollTo(0, overlayLockedScrollY || 0);
+      }
     }
   }
 
@@ -7086,6 +7101,8 @@ function initUI() {
     content.classList.remove('match-result--playoffs', 'match-result--relegation');
     if (stage === 'playoffs') content.classList.add('match-result--playoffs');
     else if (stage === 'relegation') content.classList.add('match-result--relegation');
+    content.scrollTop = 0;
+    overlay.scrollTop = 0;
     const wasHidden = overlay.classList.contains('is-hidden');
     overlay.classList.remove('is-hidden');
     overlay.setAttribute('aria-hidden', 'false');
@@ -7155,6 +7172,8 @@ function initUI() {
     mainBottom2El.textContent = mainBottom2Text || '—';
     challTop2El.textContent = challengerTop2Text || '—';
     winRateEl.textContent = winRateText || '—';
+    content.scrollTop = 0;
+    overlay.scrollTop = 0;
     const wasHidden = overlay.classList.contains('is-hidden');
     overlay.classList.remove('is-hidden');
     overlay.setAttribute('aria-hidden', 'false');

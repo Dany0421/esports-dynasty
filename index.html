@@ -542,7 +542,10 @@
       <!-- Season stats page (end of season) -->
       <div class="modal-overlay is-hidden season-stats-overlay" id="seasonStatsPage" aria-hidden="true">
         <div class="modal season-stats-page" id="seasonStatsPageContent">
-          <h2 class="season-stats__title" id="seasonStatsTitle">Season Complete</h2>
+          <div class="season-stats__header">
+            <h2 class="season-stats__title" id="seasonStatsTitle">Season Complete</h2>
+            <button type="button" class="btn btn--primary season-stats__continue" id="seasonStatsContinue">Continue</button>
+          </div>
           <p class="season-stats__subtitle" id="seasonStatsSubtitle">Season — finished. Season — started.</p>
           <div class="season-stats__body" id="seasonStatsBody">
             <div class="season-stats__col season-stats__col--summary">
@@ -581,9 +584,6 @@
                 <p id="seasonStatsChallengerTop2">—</p>
               </div>
             </div>
-          </div>
-          <div class="season-stats__actions">
-            <button type="button" class="btn btn--primary" id="seasonStatsContinue">Continue</button>
           </div>
         </div>
       </div>

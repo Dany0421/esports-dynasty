@@ -1138,6 +1138,7 @@ body {
   padding: 2.75rem 0.75rem 0.75rem;
   overflow-y: auto;
   overscroll-behavior: contain;
+  touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1153,18 +1154,36 @@ body {
   flex-direction: column;
   overflow-y: auto;
   overscroll-behavior: contain;
+  touch-action: pan-y;
   box-shadow: 0 22px 60px rgba(0,0,0,0.8);
 }
 
+.season-stats__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #020617;
+  padding-bottom: 0.7rem;
+  margin-bottom: 0.25rem;
+}
+
 .season-stats__title {
-  margin: 0 0 0.5rem 0;
+  margin: 0;
   font-size: 1.25rem;
   font-weight: 600;
   color: #e5e7eb;
 }
 
+.season-stats__continue {
+  flex-shrink: 0;
+}
+
 .season-stats__subtitle {
-  margin: 0 0 1.25rem 0;
+  margin: 0 0 1rem 0;
   font-size: 0.9rem;
   color: #9ca3af;
 }
@@ -1172,11 +1191,7 @@ body {
 .season-stats__body {
   display: flex;
   gap: 1rem;
-  margin-bottom: 1.25rem;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 0.2rem;
+  margin-bottom: 0.5rem;
 }
 
 .season-stats__col {
@@ -1220,16 +1235,6 @@ body {
   color: #fbbf24;
 }
 
-.season-stats__actions {
-  display: flex;
-  justify-content: flex-end;
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  padding-top: 0.8rem;
-  background: linear-gradient(to top, #020617 72%, rgba(2, 6, 23, 0));
-}
-
 @media (max-width: 768px) {
   .season-stats-overlay {
     align-items: flex-end;
@@ -1251,9 +1256,12 @@ body {
     -webkit-overflow-scrolling: touch;
     box-sizing: border-box;
   }
+  .season-stats__header {
+    top: 0;
+    padding-top: 0.2rem;
+  }
   .season-stats__body {
     flex-direction: column;
-    overflow-y: auto;
   }
   .season-stats__col--summary {
     max-width: none;
